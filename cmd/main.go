@@ -6,9 +6,12 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"ger_fin_api/internal/auth"
 	"ger_fin_api/internal/config"
 	"ger_fin_api/internal/database"
+	"ger_fin_api/internal/middleware"
 	"ger_fin_api/internal/migrations"
+	"ger_fin_api/internal/user"
 )
 
 func main() {
@@ -26,6 +29,17 @@ func main() {
 		log.Fatalf("failed to run migrations: %v", err)
 	}
 
+	// Services
+	userSvc := user.NewService(db)
+	authSvc := auth.NewService(userSvc, cfg.JWT.Secret)
+
+	// Handlers
+	authHandler := auth.NewHandler(authSvc)
+	userHandler := user.NewHandler(userSvc)
+
+	// Auth middleware
+	jwtAuth := middleware.JWTAuth(cfg.JWT.Secret)
+
 	r := gin.Default()
 
 	r.Use(cors.New(cors.Config{
@@ -39,6 +53,10 @@ func main() {
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
+
+	api := r.Group("")
+	authHandler.RegisterRoutes(api)
+	userHandler.RegisterRoutes(api, jwtAuth)
 
 	if err := r.Run(fmt.Sprintf(":%d", cfg.Port)); err != nil {
 		log.Fatalf("failed to start server: %v", err)
