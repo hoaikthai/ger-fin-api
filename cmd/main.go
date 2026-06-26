@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"ger_fin_api/internal/config"
 	"ger_fin_api/internal/database"
+	"ger_fin_api/internal/migrations"
 )
 
 func main() {
@@ -21,7 +22,9 @@ func main() {
 		log.Fatalf("failed to connect to database: %v", err)
 	}
 
-	_ = db // will be used as modules are wired in
+	if err := migrations.Run(db); err != nil {
+		log.Fatalf("failed to run migrations: %v", err)
+	}
 
 	r := gin.Default()
 
