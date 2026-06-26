@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"ger_fin_api/internal/account"
 	"ger_fin_api/internal/auth"
+	"ger_fin_api/internal/category"
 	"ger_fin_api/internal/config"
 	"ger_fin_api/internal/database"
 	"ger_fin_api/internal/middleware"
@@ -31,14 +32,20 @@ func main() {
 	}
 
 	// Services
-	userSvc    := user.NewService(db)
-	authSvc    := auth.NewService(userSvc, cfg.JWT.Secret)
-	accountSvc := account.NewService(db)
+	userSvc     := user.NewService(db)
+	authSvc     := auth.NewService(userSvc, cfg.JWT.Secret)
+	accountSvc  := account.NewService(db)
+	categorySvc := category.NewService(db)
+
+	if err := categorySvc.SeedDefaultCategories(); err != nil {
+		log.Fatalf("failed to seed default categories: %v", err)
+	}
 
 	// Handlers
-	authHandler    := auth.NewHandler(authSvc)
-	userHandler    := user.NewHandler(userSvc)
-	accountHandler := account.NewHandler(accountSvc)
+	authHandler     := auth.NewHandler(authSvc)
+	userHandler     := user.NewHandler(userSvc)
+	accountHandler  := account.NewHandler(accountSvc)
+	categoryHandler := category.NewHandler(categorySvc)
 
 	// Auth middleware
 	jwtAuth := middleware.JWTAuth(cfg.JWT.Secret)
@@ -61,6 +68,7 @@ func main() {
 	authHandler.RegisterRoutes(api)
 	userHandler.RegisterRoutes(api, jwtAuth)
 	accountHandler.RegisterRoutes(api, jwtAuth)
+	categoryHandler.RegisterRoutes(api, jwtAuth)
 
 	if err := r.Run(fmt.Sprintf(":%d", cfg.Port)); err != nil {
 		log.Fatalf("failed to start server: %v", err)
