@@ -9,6 +9,7 @@ import (
 	"ger_fin_api/internal/account"
 	"ger_fin_api/internal/auth"
 	"ger_fin_api/internal/category"
+	"ger_fin_api/internal/transaction"
 	"ger_fin_api/internal/config"
 	"ger_fin_api/internal/database"
 	"ger_fin_api/internal/middleware"
@@ -41,11 +42,14 @@ func main() {
 		log.Fatalf("failed to seed default categories: %v", err)
 	}
 
+	transactionSvc := transaction.NewService(db)
+
 	// Handlers
-	authHandler     := auth.NewHandler(authSvc)
-	userHandler     := user.NewHandler(userSvc)
-	accountHandler  := account.NewHandler(accountSvc)
-	categoryHandler := category.NewHandler(categorySvc)
+	authHandler        := auth.NewHandler(authSvc)
+	userHandler        := user.NewHandler(userSvc)
+	accountHandler     := account.NewHandler(accountSvc)
+	categoryHandler    := category.NewHandler(categorySvc)
+	transactionHandler := transaction.NewHandler(transactionSvc)
 
 	// Auth middleware
 	jwtAuth := middleware.JWTAuth(cfg.JWT.Secret)
@@ -69,6 +73,7 @@ func main() {
 	userHandler.RegisterRoutes(api, jwtAuth)
 	accountHandler.RegisterRoutes(api, jwtAuth)
 	categoryHandler.RegisterRoutes(api, jwtAuth)
+	transactionHandler.RegisterRoutes(api, jwtAuth)
 
 	if err := r.Run(fmt.Sprintf(":%d", cfg.Port)); err != nil {
 		log.Fatalf("failed to start server: %v", err)
