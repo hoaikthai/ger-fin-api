@@ -1,0 +1,30 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: fin_db
+    ports:
+      - '5433:5432'
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  # backend:
+  #   build: .
+  #   ports:
+  #     - '3000:3000'
+  #   environment:
+  #     DB_HOST: db
+  #     DB_PORT: 5432
+  #     DB_USER: postgres
+  #     DB_PASS: password
+  #     DB_NAME: fin_db
+  #     JWT_SECRET: secret
+  #   depends_on:
+  #     - db
+
+volumes:
+  db_data:

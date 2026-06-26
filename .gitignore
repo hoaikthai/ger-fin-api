@@ -1,0 +1,36 @@
+# Binaries
+/main
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Build output
+/build
+
+# Test coverage
+*.out
+/coverage
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.sublime-workspace
+
+# OS
+.DS_Store
+
+# Swagger generated
+docs/docs.go
+docs/swagger.json
+docs/swagger.yaml
