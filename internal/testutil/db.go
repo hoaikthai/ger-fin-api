@@ -55,3 +55,8 @@ func AccountCols() []string {
 func CategoryCols() []string {
 	return []string{"id", "createdAt", "updatedAt", "deletedAt", "name", "type", "isDefault", "userId", "parentId"}
 }
+
+// ExchangeRateCols returns the ordered column list for ExchangeRate rows in sqlmock.
+func ExchangeRateCols() []string {
+	return []string{"id", "createdAt", "updatedAt", "deletedAt", "baseCurrency", "targetCurrency", "rate", "fetchedAt"}
+}
