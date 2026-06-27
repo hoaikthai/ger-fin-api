@@ -3,6 +3,7 @@ package transaction
 import (
 	"bytes"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -14,6 +15,12 @@ import (
 	"ger_fin_api/internal/common"
 
 	"gorm.io/gorm"
+)
+
+// Transfer looks up these seeded categories by name; they must match SeedDefaultCategories exactly.
+const (
+	transferOutCategory = "Outgoing transfer"
+	transferInCategory  = "Incoming transfer"
 )
 
 type Service struct {
@@ -74,7 +81,7 @@ func validateAmountSign(txType common.TransactionType, amount float64) error {
 func (s *Service) Create(dto CreateTransactionDto, userId string) (*Transaction, error) {
 	var acc account.Account
 	if err := s.db.Where("id = ? AND \"userId\" = ?", dto.AccountId, userId).First(&acc).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, common.NewNotFound("Account not found")
 		}
 		return nil, err
@@ -82,7 +89,7 @@ func (s *Service) Create(dto CreateTransactionDto, userId string) (*Transaction,
 
 	var cat category.Category
 	if err := s.db.First(&cat, "id = ?", dto.CategoryId).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, common.NewNotFound("Category not found")
 		}
 		return nil, err
@@ -136,7 +143,7 @@ func (s *Service) FindOne(id, userId string) (*Transaction, error) {
 	err := s.withRelations(s.db).
 		Where("id = ? AND \"userId\" = ?", id, userId).
 		First(&tx).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, common.NewNotFound("Transaction not found")
 	}
 	return &tx, err
@@ -151,7 +158,7 @@ func (s *Service) Update(id string, dto UpdateTransactionDto, userId string) (*T
 	if dto.AccountId != nil {
 		var acc account.Account
 		if err := s.db.Where("id = ? AND \"userId\" = ?", *dto.AccountId, userId).First(&acc).Error; err != nil {
-			if err == gorm.ErrRecordNotFound {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return nil, common.NewNotFound("Account not found")
 			}
 			return nil, err
@@ -161,7 +168,7 @@ func (s *Service) Update(id string, dto UpdateTransactionDto, userId string) (*T
 	if dto.CategoryId != nil {
 		var cat category.Category
 		if err := s.db.First(&cat, "id = ?", *dto.CategoryId).Error; err != nil {
-			if err == gorm.ErrRecordNotFound {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return nil, common.NewNotFound("Category not found")
 			}
 			return nil, err
@@ -220,7 +227,7 @@ func (s *Service) Remove(id, userId string) error {
 func (s *Service) FindByAccount(accountId, userId string, period common.TimePeriod, offset int) ([]Transaction, error) {
 	var acc account.Account
 	if err := s.db.Where("id = ? AND \"userId\" = ?", accountId, userId).First(&acc).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, common.NewNotFound("Account not found")
 		}
 		return nil, err
@@ -242,7 +249,7 @@ func (s *Service) Transfer(dto CreateTransferDto, userId string) (*TransferResul
 
 	var srcAcc account.Account
 	if err := s.db.Where("id = ? AND \"userId\" = ?", dto.SourceAccountId, userId).First(&srcAcc).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, common.NewNotFound("Source account not found")
 		}
 		return nil, err
@@ -250,19 +257,19 @@ func (s *Service) Transfer(dto CreateTransferDto, userId string) (*TransferResul
 
 	var dstAcc account.Account
 	if err := s.db.Where("id = ? AND \"userId\" = ?", dto.DestinationAccountId, userId).First(&dstAcc).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, common.NewNotFound("Destination account not found")
 		}
 		return nil, err
 	}
 
 	var outCat category.Category
-	if err := s.db.Where("name = ? AND \"isDefault\" = ? AND type = ?", "Outgoing transfer", true, "expense").First(&outCat).Error; err != nil {
+	if err := s.db.Where("name = ? AND \"isDefault\" = ? AND type = ?", transferOutCategory, true, "expense").First(&outCat).Error; err != nil {
 		return nil, common.NewNotFound("Outgoing transfer category not found")
 	}
 
 	var inCat category.Category
-	if err := s.db.Where("name = ? AND \"isDefault\" = ? AND type = ?", "Incoming transfer", true, "income").First(&inCat).Error; err != nil {
+	if err := s.db.Where("name = ? AND \"isDefault\" = ? AND type = ?", transferInCategory, true, "income").First(&inCat).Error; err != nil {
 		return nil, common.NewNotFound("Incoming transfer category not found")
 	}
 
@@ -284,16 +291,23 @@ func (s *Service) Transfer(dto CreateTransferDto, userId string) (*TransferResul
 		TransactionDate: dto.TransactionDate,
 	}
 
-	src, err := s.Create(srcDto, userId)
-	if err != nil {
+	var result *TransferResult
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		txSvc := &Service{db: tx}
+		src, err := txSvc.Create(srcDto, userId)
+		if err != nil {
+			return err
+		}
+		dst, err := txSvc.Create(dstDto, userId)
+		if err != nil {
+			return err
+		}
+		result = &TransferResult{SourceTransaction: src, DestinationTransaction: dst}
+		return nil
+	}); err != nil {
 		return nil, err
 	}
-	dst, err := s.Create(dstDto, userId)
-	if err != nil {
-		return nil, err
-	}
-
-	return &TransferResult{SourceTransaction: src, DestinationTransaction: dst}, nil
+	return result, nil
 }
 
 func (s *Service) ImportFromCsv(csvData []byte, userId string) (*ImportResult, error) {
@@ -366,7 +380,7 @@ func (s *Service) ImportFromCsv(csvData []byte, userId string) (*ImportResult, e
 		}
 	}
 	if len(preErrors) > 0 {
-		return nil, common.NewBadRequest(strings.Join(preErrors, ". ")+" Please create these first.")
+		return nil, common.NewBadRequest(strings.Join(preErrors, ". ") + " Please create these first.")
 	}
 
 	// First pass: validate every row
@@ -406,44 +420,50 @@ func (s *Service) ImportFromCsv(csvData []byte, userId string) (*ImportResult, e
 		return &ImportResult{Imported: 0, Errors: rowErrors}, nil
 	}
 
-	// Second pass: import all rows
-	imported := 0
-	for _, r := range rows {
-		wallet := r[colIdx["Wallet"]]
-		catName := r[colIdx["Category"]]
-		dateStr := r[colIdx["Date"]]
-		amountStr := r[colIdx["Amount"]]
+	// Second pass: import all rows inside a single transaction so a failure rolls back all inserts.
+	var imported int
+	if err := s.db.Transaction(func(tx *gorm.DB) error {
+		txSvc := &Service{db: tx}
+		for _, r := range rows {
+			wallet := r[colIdx["Wallet"]]
+			catName := r[colIdx["Category"]]
+			dateStr := r[colIdx["Date"]]
+			amountStr := r[colIdx["Amount"]]
 
-		acc := accByName[wallet]
-		cat := catByName[catName]
+			acc := accByName[wallet]
+			cat := catByName[catName]
 
-		amount, _ := parseAmount(amountStr)
-		txDate, _ := time.Parse("2006-01-02", dateStr)
-		if txDate.IsZero() {
-			txDate, _ = time.Parse(time.RFC3339, dateStr)
-		}
+			amount, _ := parseAmount(amountStr)
+			txDate, _ := time.Parse("2006-01-02", dateStr)
+			if txDate.IsZero() {
+				txDate, _ = time.Parse(time.RFC3339, dateStr)
+			}
 
-		note := ""
-		if idx, ok := colIdx["Note"]; ok && idx < len(r) {
-			note = r[idx]
-		}
-		if note == "" {
-			note = "Imported transaction"
-		}
+			note := ""
+			if idx, ok := colIdx["Note"]; ok && idx < len(r) {
+				note = r[idx]
+			}
+			if note == "" {
+				note = "Imported transaction"
+			}
 
-		dto := CreateTransactionDto{
-			Type:            common.TransactionType(cat.Type),
-			Amount:          amount,
-			Description:     note,
-			CategoryId:      cat.ID,
-			AccountId:       acc.ID,
-			TransactionDate: &txDate,
-		}
+			dto := CreateTransactionDto{
+				Type:            common.TransactionType(cat.Type),
+				Amount:          amount,
+				Description:     note,
+				CategoryId:      cat.ID,
+				AccountId:       acc.ID,
+				TransactionDate: &txDate,
+			}
 
-		if _, err := s.Create(dto, userId); err != nil {
-			return nil, err
+			if _, err := txSvc.Create(dto, userId); err != nil {
+				return err
+			}
+			imported++
 		}
-		imported++
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	return &ImportResult{Imported: imported, Errors: []string{}}, nil

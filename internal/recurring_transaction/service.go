@@ -1,6 +1,7 @@
 package recurring_transaction
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -66,7 +67,7 @@ func (s *Service) FindOne(id, userId string) (*RecurringTransaction, error) {
 	err := s.withRelations(s.db).
 		Where("id = ? AND \"userId\" = ?", id, userId).
 		First(&rt).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, common.NewNotFound("Recurring transaction not found")
 	}
 	return &rt, err
@@ -158,6 +159,9 @@ func (s *Service) processOne(rt RecurringTransaction, now time.Time) error {
 		return fmt.Errorf("failed to create auto-generated transaction: %w", err)
 	}
 
+	if rt.NextDueDate == nil {
+		return fmt.Errorf("recurring transaction %s has nil nextDueDate", rt.ID)
+	}
 	nextDue := calculateNextDueDate(*rt.NextDueDate, common.RecurrenceFrequency(rt.Frequency))
 	return s.db.Model(&rt).Update("nextDueDate", nextDue).Error
 }

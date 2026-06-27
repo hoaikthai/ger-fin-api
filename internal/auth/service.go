@@ -10,13 +10,16 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+const bcryptCost = 10
+
 type Service struct {
 	userSvc   *user.Service
 	jwtSecret string
+	jwtExpiry time.Duration
 }
 
-func NewService(userSvc *user.Service, jwtSecret string) *Service {
-	return &Service{userSvc: userSvc, jwtSecret: jwtSecret}
+func NewService(userSvc *user.Service, jwtSecret string, jwtExpiry time.Duration) *Service {
+	return &Service{userSvc: userSvc, jwtSecret: jwtSecret, jwtExpiry: jwtExpiry}
 }
 
 func (s *Service) Register(dto RegisterDto) (*user.User, error) {
@@ -28,7 +31,7 @@ func (s *Service) Register(dto RegisterDto) (*user.User, error) {
 		return nil, common.NewConflict("Email already in use")
 	}
 
-	hashed, err := bcrypt.GenerateFromPassword([]byte(dto.Password), 10)
+	hashed, err := bcrypt.GenerateFromPassword([]byte(dto.Password), bcryptCost)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +72,7 @@ func (s *Service) Login(email, password string) (string, error) {
 		Sub:   u.ID,
 		Email: u.Email,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(s.jwtExpiry)),
 		},
 	}
 

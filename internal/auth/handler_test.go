@@ -28,7 +28,7 @@ func setupAuthRouter(t *testing.T) (*gin.Engine, sqlmock.Sqlmock) {
 	r := gin.New()
 
 	userSvc := user.NewService(db)
-	authSvc := auth.NewService(userSvc, "test-secret")
+	authSvc := auth.NewService(userSvc, "test-secret", time.Hour)
 	auth.NewHandler(authSvc).RegisterRoutes(r.Group(""))
 
 	return r, mock

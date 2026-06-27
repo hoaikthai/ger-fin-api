@@ -1,8 +1,10 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -23,7 +25,7 @@ type DatabaseConfig struct {
 
 type JWTConfig struct {
 	Secret    string
-	ExpiresIn string
+	ExpiresIn time.Duration
 }
 
 func (d DatabaseConfig) DSN() string {
@@ -43,8 +45,25 @@ func Load() (*Config, error) {
 
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
+	secret := viper.GetString("JWT_SECRET")
+	if secret == "" {
+		return nil, errors.New("JWT_SECRET must be set")
+	}
+
+	expiresIn := time.Hour
+	if raw := viper.GetString("JWT_EXPIRES_IN"); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil {
+			expiresIn = d
+		}
+	}
+
+	port := viper.GetInt("PORT")
+	if port == 0 {
+		port = 3000
+	}
+
 	cfg := &Config{
-		Port: viper.GetInt("PORT"),
+		Port: port,
 		Database: DatabaseConfig{
 			Host:     viper.GetString("DB_HOST"),
 			Port:     viper.GetInt("DB_PORT"),
@@ -53,13 +72,9 @@ func Load() (*Config, error) {
 			Name:     viper.GetString("DB_NAME"),
 		},
 		JWT: JWTConfig{
-			Secret:    viper.GetString("JWT_SECRET"),
-			ExpiresIn: "1h",
+			Secret:    secret,
+			ExpiresIn: expiresIn,
 		},
-	}
-
-	if cfg.Port == 0 {
-		cfg.Port = 3000
 	}
 
 	return cfg, nil

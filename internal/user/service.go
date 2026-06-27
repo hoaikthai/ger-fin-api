@@ -1,6 +1,8 @@
 package user
 
 import (
+	"errors"
+
 	"ger_fin_api/internal/common"
 
 	"gorm.io/gorm"
@@ -17,7 +19,7 @@ func NewService(db *gorm.DB) *Service {
 func (s *Service) FindByEmail(email string) (*User, error) {
 	var u User
 	err := s.db.Where("email = ?", email).First(&u).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &u, err
@@ -26,7 +28,7 @@ func (s *Service) FindByEmail(email string) (*User, error) {
 func (s *Service) FindById(id string) (*User, error) {
 	var u User
 	err := s.db.First(&u, "id = ?", id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &u, err

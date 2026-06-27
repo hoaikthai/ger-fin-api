@@ -47,7 +47,7 @@ func main() {
 
 	// Services
 	userSvc     := user.NewService(db)
-	authSvc     := auth.NewService(userSvc, cfg.JWT.Secret)
+	authSvc     := auth.NewService(userSvc, cfg.JWT.Secret, cfg.JWT.ExpiresIn)
 	accountSvc  := account.NewService(db)
 	categorySvc := category.NewService(db)
 
@@ -77,11 +77,10 @@ func main() {
 	r := gin.Default()
 
 	r.Use(cors.New(cors.Config{
-		AllowAllOrigins:  true,
-		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
-		ExposeHeaders:    []string{"Content-Length"},
-		AllowCredentials: true,
+		AllowAllOrigins: true,
+		AllowMethods:    []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:    []string{"Origin", "Content-Type", "Authorization"},
+		ExposeHeaders:   []string{"Content-Length"},
 	}))
 
 	r.GET("/health", func(c *gin.Context) {

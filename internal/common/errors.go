@@ -1,6 +1,10 @@
 package common
 
-import "github.com/gin-gonic/gin"
+import (
+	"errors"
+
+	"github.com/gin-gonic/gin"
+)
 
 type AppError struct {
 	Code    int
@@ -43,6 +47,17 @@ func RespondError(c *gin.Context, err *AppError) {
 		"message":    err.Msg,
 		"error":      err.ErrText,
 	})
+}
+
+// RespondAppError writes the appropriate HTTP response for any service-layer error.
+// AppErrors produce their own status code; all other errors produce a 500.
+func RespondAppError(c *gin.Context, err error) {
+	var appErr *AppError
+	if errors.As(err, &appErr) {
+		RespondError(c, appErr)
+		return
+	}
+	RespondInternalError(c)
 }
 
 // ErrorResponse is the standard error envelope returned by all endpoints.

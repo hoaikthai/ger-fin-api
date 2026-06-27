@@ -1,8 +1,6 @@
 package recurring_transaction
 
 import (
-	"errors"
-
 	"ger_fin_api/internal/common"
 	"ger_fin_api/internal/middleware"
 
@@ -47,7 +45,7 @@ func (h *Handler) create(c *gin.Context) {
 
 	rt, err := h.svc.Create(dto, claims.Sub)
 	if err != nil {
-		respondErr(c, err)
+		common.RespondAppError(c, err)
 		return
 	}
 	c.JSON(201, rt)
@@ -87,7 +85,7 @@ func (h *Handler) findOne(c *gin.Context) {
 
 	rt, err := h.svc.FindOne(c.Param("id"), claims.Sub)
 	if err != nil {
-		respondErr(c, err)
+		common.RespondAppError(c, err)
 		return
 	}
 	c.JSON(200, rt)
@@ -116,7 +114,7 @@ func (h *Handler) update(c *gin.Context) {
 
 	rt, err := h.svc.Update(c.Param("id"), dto, claims.Sub)
 	if err != nil {
-		respondErr(c, err)
+		common.RespondAppError(c, err)
 		return
 	}
 	c.JSON(200, rt)
@@ -136,17 +134,8 @@ func (h *Handler) remove(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 
 	if err := h.svc.Remove(c.Param("id"), claims.Sub); err != nil {
-		respondErr(c, err)
+		common.RespondAppError(c, err)
 		return
 	}
 	c.JSON(200, gin.H{"message": "Recurring transaction deleted successfully"})
-}
-
-func respondErr(c *gin.Context, err error) {
-	var appErr *common.AppError
-	if errors.As(err, &appErr) {
-		common.RespondError(c, appErr)
-		return
-	}
-	common.RespondInternalError(c)
 }

@@ -1,8 +1,6 @@
 package category
 
 import (
-	"errors"
-
 	"ger_fin_api/internal/common"
 	"ger_fin_api/internal/middleware"
 
@@ -47,7 +45,7 @@ func (h *Handler) create(c *gin.Context) {
 
 	cat, err := h.svc.Create(dto, claims.Sub)
 	if err != nil {
-		respondErr(c, err)
+		common.RespondAppError(c, err)
 		return
 	}
 	c.JSON(201, cat)
@@ -59,6 +57,7 @@ func (h *Handler) create(c *gin.Context) {
 // @Produce		json
 // @Param		type query string false "Transaction type filter" Enums(income, expense)
 // @Success		200 {array} Category
+// @Failure		400 {object} common.ErrorResponse
 // @Failure		401 {object} common.ErrorResponse
 // @Security	BearerAuth
 // @Router		/categories [get]
@@ -67,6 +66,10 @@ func (h *Handler) findAll(c *gin.Context) {
 
 	txType := c.Query("type")
 	if txType != "" {
+		if txType != string(common.TransactionTypeIncome) && txType != string(common.TransactionTypeExpense) {
+			common.RespondError(c, common.NewBadRequest("type must be one of: income, expense"))
+			return
+		}
 		cats, err := h.svc.FindAllByType(claims.Sub, common.TransactionType(txType))
 		if err != nil {
 			common.RespondInternalError(c)
@@ -100,7 +103,7 @@ func (h *Handler) findOne(c *gin.Context) {
 
 	cat, err := h.svc.FindOne(c.Param("id"), claims.Sub)
 	if err != nil {
-		respondErr(c, err)
+		common.RespondAppError(c, err)
 		return
 	}
 	c.JSON(200, cat)
@@ -130,7 +133,7 @@ func (h *Handler) update(c *gin.Context) {
 
 	cat, err := h.svc.Update(c.Param("id"), dto, claims.Sub)
 	if err != nil {
-		respondErr(c, err)
+		common.RespondAppError(c, err)
 		return
 	}
 	c.JSON(200, cat)
@@ -152,17 +155,8 @@ func (h *Handler) remove(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 
 	if err := h.svc.Remove(c.Param("id"), claims.Sub); err != nil {
-		respondErr(c, err)
+		common.RespondAppError(c, err)
 		return
 	}
 	c.JSON(200, gin.H{"message": "Category deleted successfully"})
-}
-
-func respondErr(c *gin.Context, err error) {
-	var appErr *common.AppError
-	if errors.As(err, &appErr) {
-		common.RespondError(c, appErr)
-		return
-	}
-	common.RespondInternalError(c)
 }

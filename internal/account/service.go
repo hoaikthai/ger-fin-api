@@ -1,6 +1,8 @@
 package account
 
 import (
+	"errors"
+
 	"ger_fin_api/internal/common"
 
 	"gorm.io/gorm"
@@ -40,7 +42,7 @@ func (s *Service) FindAllByUser(userId string) ([]Account, error) {
 func (s *Service) FindOne(id, userId string) (*Account, error) {
 	var a Account
 	err := s.db.Where("id = ? AND \"userId\" = ?", id, userId).First(&a).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, common.NewNotFound("Account not found")
 	}
 	return &a, err

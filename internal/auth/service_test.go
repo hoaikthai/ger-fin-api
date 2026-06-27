@@ -19,7 +19,7 @@ func newAuthSvc(t *testing.T) (*Service, sqlmock.Sqlmock) {
 	t.Helper()
 	db, mock, err := testutil.NewMockDB()
 	require.NoError(t, err)
-	return NewService(user.NewService(db), "test-secret"), mock
+	return NewService(user.NewService(db), "test-secret", time.Hour), mock
 }
 
 func TestRegister_Success(t *testing.T) {

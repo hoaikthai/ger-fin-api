@@ -1,6 +1,8 @@
 package category
 
 import (
+	"errors"
+
 	"ger_fin_api/internal/common"
 
 	"gorm.io/gorm"
@@ -39,7 +41,7 @@ func (s *Service) FindAllByType(userId string, txType common.TransactionType) ([
 func (s *Service) FindOne(id, userId string) (*Category, error) {
 	var cat Category
 	err := s.withRelations(s.db).First(&cat, "id = ?", id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, common.NewNotFound("Category not found")
 	}
 	if err != nil {

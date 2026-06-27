@@ -1,7 +1,6 @@
 package transaction
 
 import (
-	"errors"
 	"io"
 	"strconv"
 
@@ -10,6 +9,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+const maxCSVBytes = 10 * 1024 * 1024 // 10 MB
 
 type Handler struct {
 	svc *Service
@@ -60,7 +61,7 @@ func (h *Handler) create(c *gin.Context) {
 
 	tx, err := h.svc.Create(dto, claims.Sub)
 	if err != nil {
-		respondErr(c, err)
+		common.RespondAppError(c, err)
 		return
 	}
 	c.JSON(201, tx)
@@ -103,7 +104,7 @@ func (h *Handler) findOne(c *gin.Context) {
 
 	tx, err := h.svc.FindOne(c.Param("id"), claims.Sub)
 	if err != nil {
-		respondErr(c, err)
+		common.RespondAppError(c, err)
 		return
 	}
 	c.JSON(200, tx)
@@ -132,7 +133,7 @@ func (h *Handler) update(c *gin.Context) {
 
 	tx, err := h.svc.Update(c.Param("id"), dto, claims.Sub)
 	if err != nil {
-		respondErr(c, err)
+		common.RespondAppError(c, err)
 		return
 	}
 	c.JSON(200, tx)
@@ -152,7 +153,7 @@ func (h *Handler) remove(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 
 	if err := h.svc.Remove(c.Param("id"), claims.Sub); err != nil {
-		respondErr(c, err)
+		common.RespondAppError(c, err)
 		return
 	}
 	c.JSON(200, gin.H{"message": "Transaction deleted successfully"})
@@ -176,7 +177,7 @@ func (h *Handler) getByAccount(c *gin.Context) {
 
 	txs, err := h.svc.FindByAccount(c.Param("id"), claims.Sub, period, offset)
 	if err != nil {
-		respondErr(c, err)
+		common.RespondAppError(c, err)
 		return
 	}
 	c.JSON(200, txs)
@@ -204,7 +205,7 @@ func (h *Handler) createTransfer(c *gin.Context) {
 
 	result, err := h.svc.Transfer(dto, claims.Sub)
 	if err != nil {
-		respondErr(c, err)
+		common.RespondAppError(c, err)
 		return
 	}
 	c.JSON(201, result)
@@ -243,15 +244,19 @@ func (h *Handler) importCsv(c *gin.Context) {
 	}
 	defer f.Close()
 
-	buf, err := io.ReadAll(f)
+	buf, err := io.ReadAll(io.LimitReader(f, maxCSVBytes+1))
 	if err != nil {
 		common.RespondInternalError(c)
+		return
+	}
+	if int64(len(buf)) > maxCSVBytes {
+		common.RespondError(c, common.NewBadRequest("CSV file exceeds 10 MB size limit"))
 		return
 	}
 
 	result, err := h.svc.ImportFromCsv(buf, claims.Sub)
 	if err != nil {
-		respondErr(c, err)
+		common.RespondAppError(c, err)
 		return
 	}
 	c.JSON(201, result)
@@ -269,13 +274,4 @@ func hasCSVExtension(filename string) bool {
 		return false
 	}
 	return filename[len(filename)-4:] == ".csv"
-}
-
-func respondErr(c *gin.Context, err error) {
-	var appErr *common.AppError
-	if errors.As(err, &appErr) {
-		common.RespondError(c, appErr)
-		return
-	}
-	common.RespondInternalError(c)
 }
