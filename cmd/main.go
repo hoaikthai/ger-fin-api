@@ -6,17 +6,30 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
+	_ "ger_fin_api/docs"
 	"ger_fin_api/internal/account"
 	"ger_fin_api/internal/auth"
 	"ger_fin_api/internal/category"
-	"ger_fin_api/internal/transaction"
 	"ger_fin_api/internal/config"
 	"ger_fin_api/internal/database"
 	"ger_fin_api/internal/middleware"
 	"ger_fin_api/internal/migrations"
+	recurringTx "ger_fin_api/internal/recurring_transaction"
+	"ger_fin_api/internal/transaction"
 	"ger_fin_api/internal/user"
 )
 
+// @title			GerFin API
+// @version			1.0
+// @description		Personal finance management API
+// @host			localhost:3000
+// @BasePath		/
+// @securityDefinitions.apikey BearerAuth
+// @in				header
+// @name			Authorization
+// @description		Type "Bearer" followed by a space and your JWT token.
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
@@ -42,7 +55,13 @@ func main() {
 		log.Fatalf("failed to seed default categories: %v", err)
 	}
 
-	transactionSvc := transaction.NewService(db)
+	transactionSvc    := transaction.NewService(db)
+	recurringTxSvc    := recurringTx.NewService(db, transactionSvc)
+
+	// Start recurring transaction scheduler
+	scheduler := recurringTx.NewScheduler(recurringTxSvc)
+	scheduler.Start()
+	defer scheduler.Stop()
 
 	// Handlers
 	authHandler        := auth.NewHandler(authSvc)
@@ -50,6 +69,7 @@ func main() {
 	accountHandler     := account.NewHandler(accountSvc)
 	categoryHandler    := category.NewHandler(categorySvc)
 	transactionHandler := transaction.NewHandler(transactionSvc)
+	recurringTxHandler := recurringTx.NewHandler(recurringTxSvc)
 
 	// Auth middleware
 	jwtAuth := middleware.JWTAuth(cfg.JWT.Secret)
@@ -67,6 +87,7 @@ func main() {
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
+	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
 	api := r.Group("")
 	authHandler.RegisterRoutes(api)
@@ -74,6 +95,7 @@ func main() {
 	accountHandler.RegisterRoutes(api, jwtAuth)
 	categoryHandler.RegisterRoutes(api, jwtAuth)
 	transactionHandler.RegisterRoutes(api, jwtAuth)
+	recurringTxHandler.RegisterRoutes(api, jwtAuth)
 
 	if err := r.Run(fmt.Sprintf(":%d", cfg.Port)); err != nil {
 		log.Fatalf("failed to start server: %v", err)
