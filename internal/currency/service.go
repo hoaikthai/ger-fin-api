@@ -78,7 +78,7 @@ func (s *Service) Convert(amount float64, from, to string) (float64, error) {
 		return amount, nil
 	}
 
-	needed := []string{}
+	var needed []string
 	if from != "USD" {
 		needed = append(needed, from)
 	}
