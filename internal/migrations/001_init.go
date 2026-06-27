@@ -37,18 +37,15 @@ func migration001() Migration {
 						FOREIGN KEY ("userId") REFERENCES "user"("id") ON DELETE CASCADE
 				);
 
-				CREATE TYPE IF NOT EXISTS "public"."category_type_enum"
-					AS ENUM('income', 'expense');
-
 				CREATE TABLE IF NOT EXISTS "category" (
-					"id"        uuid                         NOT NULL DEFAULT uuid_generate_v4(),
-					"name"      varchar                      NOT NULL,
-					"type"      "public"."category_type_enum" NOT NULL,
-					"isDefault" boolean                      NOT NULL DEFAULT false,
+					"id"        uuid      NOT NULL DEFAULT uuid_generate_v4(),
+					"name"      varchar   NOT NULL,
+					"type"      varchar   NOT NULL,
+					"isDefault" boolean   NOT NULL DEFAULT false,
 					"userId"    uuid,
 					"parentId"  uuid,
-					"createdAt" timestamp                    NOT NULL DEFAULT now(),
-					"updatedAt" timestamp                    NOT NULL DEFAULT now(),
+					"createdAt" timestamp NOT NULL DEFAULT now(),
+					"updatedAt" timestamp NOT NULL DEFAULT now(),
 					CONSTRAINT "PK_category" PRIMARY KEY ("id"),
 					CONSTRAINT "FK_category_user"
 						FOREIGN KEY ("userId") REFERENCES "user"("id") ON DELETE CASCADE,
@@ -56,21 +53,18 @@ func migration001() Migration {
 						FOREIGN KEY ("parentId") REFERENCES "category"("id") ON DELETE CASCADE
 				);
 
-				CREATE TYPE IF NOT EXISTS "public"."transaction_type_enum"
-					AS ENUM('income', 'expense');
-
 				CREATE TABLE IF NOT EXISTS "transaction" (
-					"id"                  uuid                           NOT NULL DEFAULT uuid_generate_v4(),
-					"type"                "public"."transaction_type_enum" NOT NULL,
-					"amount"              numeric(10, 2)                 NOT NULL,
-					"description"         varchar                        NOT NULL,
-					"categoryId"          uuid                           NOT NULL,
-					"userId"              uuid                           NOT NULL,
-					"accountId"           uuid                           NOT NULL,
-					"transactionDate"     timestamp                      NOT NULL DEFAULT now(),
+					"id"                   uuid      NOT NULL DEFAULT uuid_generate_v4(),
+					"type"                 varchar   NOT NULL,
+					"amount"               numeric(10, 2) NOT NULL,
+					"description"          varchar   NOT NULL,
+					"categoryId"           uuid      NOT NULL,
+					"userId"               uuid      NOT NULL,
+					"accountId"            uuid      NOT NULL,
+					"transactionDate"      timestamp NOT NULL DEFAULT now(),
 					"relatedTransactionId" uuid,
-					"createdAt"           timestamp                      NOT NULL DEFAULT now(),
-					"updatedAt"           timestamp                      NOT NULL DEFAULT now(),
+					"createdAt"            timestamp NOT NULL DEFAULT now(),
+					"updatedAt"            timestamp NOT NULL DEFAULT now(),
 					CONSTRAINT "PK_transaction" PRIMARY KEY ("id"),
 					CONSTRAINT "FK_transaction_category"
 						FOREIGN KEY ("categoryId") REFERENCES "category"("id") ON DELETE CASCADE,
