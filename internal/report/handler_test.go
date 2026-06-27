@@ -21,6 +21,8 @@ type mockService struct {
 	monthlyTrendFn      func(userId string, from, to time.Time) ([]MonthRow, error)
 	netWorthFn          func(userId string) (*NetWorthResponse, error)
 	topCategoriesFn     func(userId string, from, to time.Time, limit int) ([]CategoryRow, error)
+	cashFlowFn          func(userId string, from, to time.Time, lookbackMonths int) (*CashFlowResponse, error)
+	yearOverYearFn      func(userId string, from, to time.Time, years int) (*YearOverYearResponse, error)
 }
 
 func (m *mockService) CategoryBreakdown(userId string, from, to time.Time) (*CategoryBreakdownResponse, error) {
@@ -34,6 +36,12 @@ func (m *mockService) NetWorth(userId string) (*NetWorthResponse, error) {
 }
 func (m *mockService) TopCategories(userId string, from, to time.Time, limit int) ([]CategoryRow, error) {
 	return m.topCategoriesFn(userId, from, to, limit)
+}
+func (m *mockService) CashFlow(userId string, from, to time.Time, lookbackMonths int) (*CashFlowResponse, error) {
+	return m.cashFlowFn(userId, from, to, lookbackMonths)
+}
+func (m *mockService) YearOverYear(userId string, from, to time.Time, years int) (*YearOverYearResponse, error) {
+	return m.yearOverYearFn(userId, from, to, years)
 }
 
 // newTestRouter wires up the report handler against a fake auth middleware that
@@ -261,5 +269,150 @@ func TestHandler_TopCategories_ServiceError(t *testing.T) {
 		},
 	}
 	w := doGet(newTestRouter(svc, "user-1"), "/reports/top-categories")
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// ── CashFlow ─────────────────────────────────────────────────────────────────
+
+func TestHandler_CashFlow_Success(t *testing.T) {
+	want := &CashFlowResponse{
+		Period:    CashFlowPeriod{From: "2026-06-01", To: "2026-06-30"},
+		Actual:    CashFlowSummary{Income: 3200, Expense: -1800, Net: 1400},
+		Projected: CashFlowSummary{Income: 3000, Expense: -2000, Net: 1000},
+		Recurring: CashFlowRecurring{Income: 500, Expense: -300},
+	}
+	svc := &mockService{
+		cashFlowFn: func(userId string, from, to time.Time, lookbackMonths int) (*CashFlowResponse, error) {
+			assert.Equal(t, "user-1", userId)
+			assert.Equal(t, 3, lookbackMonths)
+			return want, nil
+		},
+	}
+
+	w := doGet(newTestRouter(svc, "user-1"), "/reports/cash-flow?from=2026-06-01&to=2026-06-30")
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var got CashFlowResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal(t, 3200.0, got.Actual.Income)
+	assert.Equal(t, 1400.0, got.Actual.Net)
+}
+
+func TestHandler_CashFlow_DefaultMonths(t *testing.T) {
+	var captured int
+	svc := &mockService{
+		cashFlowFn: func(userId string, from, to time.Time, lookbackMonths int) (*CashFlowResponse, error) {
+			captured = lookbackMonths
+			return &CashFlowResponse{Period: CashFlowPeriod{}, Actual: CashFlowSummary{}, Projected: CashFlowSummary{}, Recurring: CashFlowRecurring{}}, nil
+		},
+	}
+
+	w := doGet(newTestRouter(svc, "user-1"), "/reports/cash-flow")
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, 3, captured)
+}
+
+func TestHandler_CashFlow_CustomMonths(t *testing.T) {
+	var captured int
+	svc := &mockService{
+		cashFlowFn: func(userId string, from, to time.Time, lookbackMonths int) (*CashFlowResponse, error) {
+			captured = lookbackMonths
+			return &CashFlowResponse{Period: CashFlowPeriod{}, Actual: CashFlowSummary{}, Projected: CashFlowSummary{}, Recurring: CashFlowRecurring{}}, nil
+		},
+	}
+
+	w := doGet(newTestRouter(svc, "user-1"), "/reports/cash-flow?months=6")
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, 6, captured)
+}
+
+func TestHandler_CashFlow_InvalidDate(t *testing.T) {
+	svc := &mockService{}
+	w := doGet(newTestRouter(svc, "user-1"), "/reports/cash-flow?from=not-a-date")
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandler_CashFlow_ServiceError(t *testing.T) {
+	svc := &mockService{
+		cashFlowFn: func(userId string, from, to time.Time, lookbackMonths int) (*CashFlowResponse, error) {
+			return nil, errors.New("db error")
+		},
+	}
+	w := doGet(newTestRouter(svc, "user-1"), "/reports/cash-flow")
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// ── YearOverYear ─────────────────────────────────────────────────────────────
+
+func TestHandler_YearOverYear_Success(t *testing.T) {
+	want := &YearOverYearResponse{
+		Months: []string{"2026-01", "2026-06"},
+		Years: []YearRow{
+			{Year: 2025, Data: []MonthRow{{Month: "2025-01", Income: 1000, Expense: -500, Net: 500}}},
+			{Year: 2026, Data: []MonthRow{{Month: "2026-01", Income: 1200, Expense: -600, Net: 600}}},
+		},
+	}
+	svc := &mockService{
+		yearOverYearFn: func(userId string, from, to time.Time, years int) (*YearOverYearResponse, error) {
+			assert.Equal(t, "user-1", userId)
+			assert.Equal(t, 2, years)
+			return want, nil
+		},
+	}
+
+	w := doGet(newTestRouter(svc, "user-1"), "/reports/year-over-year?from=2026-01-01&to=2026-06-30")
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var got YearOverYearResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Len(t, got.Years, 2)
+	assert.Equal(t, 2025, got.Years[0].Year)
+}
+
+func TestHandler_YearOverYear_DefaultYears(t *testing.T) {
+	var captured int
+	svc := &mockService{
+		yearOverYearFn: func(userId string, from, to time.Time, years int) (*YearOverYearResponse, error) {
+			captured = years
+			return &YearOverYearResponse{Months: []string{}, Years: []YearRow{}}, nil
+		},
+	}
+
+	w := doGet(newTestRouter(svc, "user-1"), "/reports/year-over-year")
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, 2, captured)
+}
+
+func TestHandler_YearOverYear_CustomYears(t *testing.T) {
+	var captured int
+	svc := &mockService{
+		yearOverYearFn: func(userId string, from, to time.Time, years int) (*YearOverYearResponse, error) {
+			captured = years
+			return &YearOverYearResponse{Months: []string{}, Years: []YearRow{}}, nil
+		},
+	}
+
+	w := doGet(newTestRouter(svc, "user-1"), "/reports/year-over-year?years=4")
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, 4, captured)
+}
+
+func TestHandler_YearOverYear_InvalidDate(t *testing.T) {
+	svc := &mockService{}
+	w := doGet(newTestRouter(svc, "user-1"), "/reports/year-over-year?to=2026/06/30")
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandler_YearOverYear_ServiceError(t *testing.T) {
+	svc := &mockService{
+		yearOverYearFn: func(userId string, from, to time.Time, years int) (*YearOverYearResponse, error) {
+			return nil, errors.New("db error")
+		},
+	}
+	w := doGet(newTestRouter(svc, "user-1"), "/reports/year-over-year")
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
 }

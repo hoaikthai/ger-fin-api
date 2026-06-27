@@ -30,3 +30,36 @@ type NetWorthResponse struct {
 	Total    float64           `json:"total"`
 	Accounts []NetWorthAccount `json:"accounts"`
 }
+
+type CashFlowPeriod struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+type CashFlowSummary struct {
+	Income  float64 `json:"income"`
+	Expense float64 `json:"expense"`
+	Net     float64 `json:"net"`
+}
+
+type CashFlowRecurring struct {
+	Income  float64 `json:"income"`
+	Expense float64 `json:"expense"`
+}
+
+type CashFlowResponse struct {
+	Period    CashFlowPeriod    `json:"period"`
+	Actual    CashFlowSummary   `json:"actual"`
+	Projected CashFlowSummary   `json:"projected"`
+	Recurring CashFlowRecurring `json:"recurring"`
+}
+
+type YearRow struct {
+	Year int        `json:"year"`
+	Data []MonthRow `json:"data"`
+}
+
+type YearOverYearResponse struct {
+	Months []string  `json:"months"`
+	Years  []YearRow `json:"years"`
+}

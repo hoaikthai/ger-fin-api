@@ -13,6 +13,7 @@ import (
 	"ger_fin_api/internal/account"
 	"ger_fin_api/internal/category"
 	"ger_fin_api/internal/common"
+	recurring_transaction "ger_fin_api/internal/recurring_transaction"
 	"ger_fin_api/internal/testutil"
 	"ger_fin_api/internal/transaction"
 	"ger_fin_api/internal/user"
@@ -292,4 +293,258 @@ func TestRealDB_Report_TopCategories_PercentageRelativeToAll(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	assert.Equal(t, 60.0, results[0].Percentage)
+}
+
+func seedRecurringTx(t *testing.T, db *gorm.DB, userId, catId, accId string, typ common.TransactionType, amount float64, freq common.RecurrenceFrequency, start time.Time) *recurring_transaction.RecurringTransaction {
+	t.Helper()
+	txSvc := transaction.NewService(db)
+	svc := recurring_transaction.NewService(db, txSvc)
+	rt, err := svc.Create(recurring_transaction.CreateRecurringTransactionDto{
+		Type:        typ,
+		Amount:      amount,
+		Description: "Recurring test",
+		CategoryId:  catId,
+		AccountId:   accId,
+		Frequency:   freq,
+		StartDate:   start,
+	}, userId)
+	require.NoError(t, err)
+	return rt
+}
+
+func TestRealDB_CashFlow_Actual(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	userId := seedUser(t, db)
+	acc := seedAccount(t, db, userId, 0)
+	incomeCat := seedCategory(t, db, userId, common.TransactionTypeIncome)
+	expenseCat := seedCategory(t, db, userId, common.TransactionTypeExpense)
+
+	now := time.Now().UTC()
+	from := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	to := now
+
+	seedTx(t, db, userId, incomeCat.ID, acc.ID, common.TransactionTypeIncome, 2000, now)
+	seedTx(t, db, userId, expenseCat.ID, acc.ID, common.TransactionTypeExpense, -800, now)
+
+	resp, err := svc.CashFlow(userId, from, to, 3)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+
+	assert.Equal(t, 2000.0, resp.Actual.Income)
+	assert.Equal(t, -800.0, resp.Actual.Expense)
+	assert.Equal(t, 1200.0, resp.Actual.Net)
+}
+
+func TestRealDB_CashFlow_ProjectedRollingAverage(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	userId := seedUser(t, db)
+	acc := seedAccount(t, db, userId, 0)
+	incomeCat := seedCategory(t, db, userId, common.TransactionTypeIncome)
+
+	now := time.Now().UTC()
+	from := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	to := now
+
+	// Seed 3000 income in the 3-month lookback window (no recurring txs)
+	m1 := from.AddDate(0, -2, 0)
+	m2 := from.AddDate(0, -1, 0)
+	seedTx(t, db, userId, incomeCat.ID, acc.ID, common.TransactionTypeIncome, 1500, m1)
+	seedTx(t, db, userId, incomeCat.ID, acc.ID, common.TransactionTypeIncome, 1500, m2)
+
+	resp, err := svc.CashFlow(userId, from, to, 3)
+	require.NoError(t, err)
+
+	// Rolling avg = 3000 / 3 = 1000/month; period ≈ current partial month
+	assert.Greater(t, resp.Projected.Income, 0.0)
+	assert.Equal(t, 0.0, resp.Recurring.Income)
+}
+
+func TestRealDB_CashFlow_RecurringComponent(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	userId := seedUser(t, db)
+	acc := seedAccount(t, db, userId, 1000)
+	incomeCat := seedCategory(t, db, userId, common.TransactionTypeIncome)
+
+	// Recurring monthly income starting at the beginning of this month
+	now := time.Now().UTC()
+	from := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(now.Year(), now.Month()+1, 0, 23, 59, 59, 0, time.UTC) // end of month
+
+	seedRecurringTx(t, db, userId, incomeCat.ID, acc.ID, common.TransactionTypeIncome, 500, common.RecurrenceFrequencyMonthly, from)
+
+	resp, err := svc.CashFlow(userId, from, to, 3)
+	require.NoError(t, err)
+
+	assert.Equal(t, 500.0, resp.Recurring.Income)
+	assert.Greater(t, resp.Projected.Income, 0.0)
+}
+
+func TestRealDB_CashFlow_ExcludesTransfers(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+	seedDefaultCategories(t, db)
+	txSvc := transaction.NewService(db)
+
+	userId := seedUser(t, db)
+	src := seedAccount(t, db, userId, 1000)
+	dst := seedAccount(t, db, userId, 0)
+	expenseCat := seedCategory(t, db, userId, common.TransactionTypeExpense)
+
+	now := time.Now().UTC()
+	from := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	to := now
+
+	seedTx(t, db, userId, expenseCat.ID, src.ID, common.TransactionTypeExpense, -100, now)
+	_, err := txSvc.Transfer(transaction.CreateTransferDto{
+		SourceAccountId:      src.ID,
+		DestinationAccountId: dst.ID,
+		Amount:               200,
+		Description:          "Transfer",
+	}, userId)
+	require.NoError(t, err)
+
+	resp, err := svc.CashFlow(userId, from, to, 3)
+	require.NoError(t, err)
+
+	// Only the -100 expense should appear; transfer legs excluded
+	assert.Equal(t, -100.0, resp.Actual.Expense)
+	assert.Equal(t, 0.0, resp.Actual.Income)
+}
+
+func TestRealDB_CashFlow_IsolatedByUser(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	userA := seedUser(t, db)
+	userB := seedUser(t, db)
+	accA := seedAccount(t, db, userA, 0)
+	accB := seedAccount(t, db, userB, 0)
+	catA := seedCategory(t, db, userA, common.TransactionTypeIncome)
+	catB := seedCategory(t, db, userB, common.TransactionTypeIncome)
+
+	now := time.Now().UTC()
+	from := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	to := now
+
+	seedTx(t, db, userA, catA.ID, accA.ID, common.TransactionTypeIncome, 500, now)
+	seedTx(t, db, userB, catB.ID, accB.ID, common.TransactionTypeIncome, 9999, now)
+
+	resp, err := svc.CashFlow(userA, from, to, 3)
+	require.NoError(t, err)
+	assert.Equal(t, 500.0, resp.Actual.Income)
+}
+
+func TestRealDB_YearOverYear(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	userId := seedUser(t, db)
+	acc := seedAccount(t, db, userId, 0)
+	incomeCat := seedCategory(t, db, userId, common.TransactionTypeIncome)
+	expenseCat := seedCategory(t, db, userId, common.TransactionTypeExpense)
+
+	year := time.Now().Year()
+	jan := func(y int) time.Time { return time.Date(y, 1, 15, 0, 0, 0, 0, time.UTC) }
+
+	seedTx(t, db, userId, incomeCat.ID, acc.ID, common.TransactionTypeIncome, 1000, jan(year-1))
+	seedTx(t, db, userId, expenseCat.ID, acc.ID, common.TransactionTypeExpense, -400, jan(year-1))
+	seedTx(t, db, userId, incomeCat.ID, acc.ID, common.TransactionTypeIncome, 1200, jan(year))
+
+	from := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(year, 3, 31, 23, 59, 59, 0, time.UTC)
+
+	resp, err := svc.YearOverYear(userId, from, to, 2)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+
+	require.Len(t, resp.Years, 2)
+	assert.Equal(t, year-1, resp.Years[0].Year)
+	assert.Equal(t, year, resp.Years[1].Year)
+
+	// January of year-1
+	require.NotEmpty(t, resp.Years[0].Data)
+	jan0 := resp.Years[0].Data[0]
+	assert.Equal(t, fmt.Sprintf("%d-01", year-1), jan0.Month)
+	assert.Equal(t, 1000.0, jan0.Income)
+	assert.Equal(t, -400.0, jan0.Expense)
+
+	// January of current year
+	jan1 := resp.Years[1].Data[0]
+	assert.Equal(t, fmt.Sprintf("%d-01", year), jan1.Month)
+	assert.Equal(t, 1200.0, jan1.Income)
+}
+
+func TestRealDB_YearOverYear_FillsEmptyMonths(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	userId := seedUser(t, db)
+	acc := seedAccount(t, db, userId, 0)
+	incomeCat := seedCategory(t, db, userId, common.TransactionTypeIncome)
+
+	year := time.Now().Year()
+	seedTx(t, db, userId, incomeCat.ID, acc.ID, common.TransactionTypeIncome, 500, time.Date(year, 1, 15, 0, 0, 0, 0, time.UTC))
+
+	from := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(year, 3, 31, 23, 59, 59, 0, time.UTC)
+
+	resp, err := svc.YearOverYear(userId, from, to, 1)
+	require.NoError(t, err)
+
+	require.Len(t, resp.Years, 1)
+	require.Len(t, resp.Years[0].Data, 3) // Jan, Feb, Mar
+
+	assert.Equal(t, 500.0, resp.Years[0].Data[0].Income)
+	assert.Equal(t, 0.0, resp.Years[0].Data[1].Income)
+	assert.Equal(t, 0.0, resp.Years[0].Data[2].Income)
+}
+
+func TestRealDB_YearOverYear_MonthsAxisAnchored(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	userId := seedUser(t, db)
+
+	year := time.Now().Year()
+	from := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(year, 3, 31, 23, 59, 59, 0, time.UTC)
+
+	resp, err := svc.YearOverYear(userId, from, to, 2)
+	require.NoError(t, err)
+
+	require.Len(t, resp.Months, 3)
+	assert.Equal(t, fmt.Sprintf("%d-01", year), resp.Months[0])
+	assert.Equal(t, fmt.Sprintf("%d-02", year), resp.Months[1])
+	assert.Equal(t, fmt.Sprintf("%d-03", year), resp.Months[2])
+}
+
+func TestRealDB_YearOverYear_IsolatedByUser(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	userA := seedUser(t, db)
+	userB := seedUser(t, db)
+	accA := seedAccount(t, db, userA, 0)
+	accB := seedAccount(t, db, userB, 0)
+	catA := seedCategory(t, db, userA, common.TransactionTypeIncome)
+	catB := seedCategory(t, db, userB, common.TransactionTypeIncome)
+
+	year := time.Now().Year()
+	seedTx(t, db, userA, catA.ID, accA.ID, common.TransactionTypeIncome, 300, time.Date(year, 1, 15, 0, 0, 0, 0, time.UTC))
+	seedTx(t, db, userB, catB.ID, accB.ID, common.TransactionTypeIncome, 9999, time.Date(year, 1, 15, 0, 0, 0, 0, time.UTC))
+
+	from := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(year, 1, 31, 23, 59, 59, 0, time.UTC)
+
+	resp, err := svc.YearOverYear(userA, from, to, 1)
+	require.NoError(t, err)
+
+	require.Len(t, resp.Years, 1)
+	assert.Equal(t, 300.0, resp.Years[0].Data[0].Income)
 }

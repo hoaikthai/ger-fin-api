@@ -42,10 +42,22 @@
 - [x] **Category breakdown report** — income/expense split by category for a period
 - [x] **Monthly trend report** — income vs expense by month, zero-filled for empty months
 - [x] **Net worth snapshot** — sum of all active account balances
-- [ ] **Cash flow report** — projected vs actual cash flow for a period
+- [x] **Cash flow report** — projected vs actual cash flow for a period
 - [x] **Top spending categories** — ranked by amount for a period (`limit` param, default 5)
-- [ ] **Year-over-year comparison** — compare the same period across years
+- [x] **Year-over-year comparison** — compare the same period across years
 - [x] **Custom date range filtering** — `from`/`to` on all report endpoints (default: current month)
+
+---
+
+## Phase 2.5 — User Preferences & Settings
+
+> Per-user configuration store. Unlocks persistent defaults for reporting (Phase 2), base currency (Phase 5), and notification thresholds (Phase 7).
+
+- [ ] **User settings model** — key-value or typed columns per user (`userId`, versioned)
+- [ ] **Settings CRUD** (`GET /users/settings`, `PATCH /users/settings`)
+- [ ] **Reporting defaults** — persist `cashFlowMonths` and `yearOverYearYears` preferences; used as fallback when query param is omitted
+- [ ] **Base currency preference** — placeholder field (`baseCurrency`), activated in Phase 5
+- [ ] **Default account** — optional preferred account for quick-add flows
 
 ---
 
@@ -167,7 +179,8 @@
 | Phase | Status | Notes |
 |-------|--------|-------|
 | 1 — Core Foundation | ✅ Done | All CRUD, scheduler, tests |
-| 2 — Reporting & Analytics | 🟡 Partial | 5/7 done; cash flow & YoY remain |
+| 2 — Reporting & Analytics | ✅ Done | All 7 reports complete |
+| 2.5 — User Preferences & Settings | 🔲 Planned | Unlocks reporting defaults, currency, notifications |
 | 3 — Budget Planning | 🔲 Planned | New domain |
 | 4 — Financial Goals | 🔲 Planned | New domain |
 | 5 — Multi-Currency | 🔲 Planned | Needs external rate source |

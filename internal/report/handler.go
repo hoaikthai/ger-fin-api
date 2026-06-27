@@ -25,6 +25,8 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, auth gin.HandlerFunc) {
 	g.GET("/monthly-trend", h.monthlyTrend)
 	g.GET("/net-worth", h.netWorth)
 	g.GET("/top-categories", h.topCategories)
+	g.GET("/cash-flow", h.cashFlow)
+	g.GET("/year-over-year", h.yearOverYear)
 }
 
 // parseDateRange returns from/to from query params, defaulting to current calendar month.
@@ -159,4 +161,76 @@ func (h *Handler) topCategories(c *gin.Context) {
 		return
 	}
 	c.JSON(200, rows)
+}
+
+// @Summary		Cash flow report
+// @Description	Actual vs projected cash flow for a period; projection combines a rolling historical average with scheduled recurring transactions
+// @Tags		reports
+// @Produce		json
+// @Param		from   query string  false "Start date (YYYY-MM-DD), defaults to first of current month"
+// @Param		to     query string  false "End date   (YYYY-MM-DD), defaults to today"
+// @Param		months query integer false "Rolling lookback months for projection (1–12, default 3)"
+// @Success		200 {object} CashFlowResponse
+// @Failure		400 {object} common.ErrorResponse
+// @Failure		401 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/reports/cash-flow [get]
+func (h *Handler) cashFlow(c *gin.Context) {
+	claims := middleware.CurrentUser(c)
+
+	from, to, err := parseDateRange(c)
+	if err != nil {
+		common.RespondError(c, common.NewBadRequest(err.Error()))
+		return
+	}
+
+	months := 3
+	if mStr := c.Query("months"); mStr != "" {
+		if m, err := strconv.Atoi(mStr); err == nil && m >= 1 && m <= 12 {
+			months = m
+		}
+	}
+
+	resp, err := h.svc.CashFlow(claims.Sub, from, to, months)
+	if err != nil {
+		common.RespondInternalError(c)
+		return
+	}
+	c.JSON(200, resp)
+}
+
+// @Summary		Year-over-year comparison
+// @Description	Monthly income and expense broken down by year for the same calendar window; months with no transactions are zero-filled
+// @Tags		reports
+// @Produce		json
+// @Param		from  query string  false "Start date anchoring the month window (YYYY-MM-DD), defaults to first of current month"
+// @Param		to    query string  false "End date anchoring the month window   (YYYY-MM-DD), defaults to today"
+// @Param		years query integer false "Number of years to compare (1–5, default 2)"
+// @Success		200 {object} YearOverYearResponse
+// @Failure		400 {object} common.ErrorResponse
+// @Failure		401 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/reports/year-over-year [get]
+func (h *Handler) yearOverYear(c *gin.Context) {
+	claims := middleware.CurrentUser(c)
+
+	from, to, err := parseDateRange(c)
+	if err != nil {
+		common.RespondError(c, common.NewBadRequest(err.Error()))
+		return
+	}
+
+	years := 2
+	if yStr := c.Query("years"); yStr != "" {
+		if y, err := strconv.Atoi(yStr); err == nil && y >= 1 && y <= 5 {
+			years = y
+		}
+	}
+
+	resp, err := h.svc.YearOverYear(claims.Sub, from, to, years)
+	if err != nil {
+		common.RespondInternalError(c)
+		return
+	}
+	c.JSON(200, resp)
 }
