@@ -28,7 +28,8 @@ func (s *Service) FetchAndStoreRates() error {
 		return nil
 	}
 
-	resp, err := http.Get(fmt.Sprintf("https://openexchangerates.org/api/latest.json?app_id=%s", s.appID))
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(fmt.Sprintf("https://openexchangerates.org/api/latest.json?app_id=%s", s.appID))
 	if err != nil {
 		return fmt.Errorf("fetch rates from OXR: %w", err)
 	}
@@ -46,11 +47,6 @@ func (s *Service) FetchAndStoreRates() error {
 		return fmt.Errorf("decode OXR response: %w", err)
 	}
 
-	// Soft-delete all existing rates for this base so the unique index stays clean
-	if err := s.db.Where(`"baseCurrency" = ?`, payload.Base).Delete(&ExchangeRate{}).Error; err != nil {
-		return fmt.Errorf("clear old rates: %w", err)
-	}
-
 	now := time.Now()
 	rates := make([]ExchangeRate, 0, len(payload.Rates))
 	for target, rate := range payload.Rates {
@@ -61,12 +57,20 @@ func (s *Service) FetchAndStoreRates() error {
 			FetchedAt:      now,
 		})
 	}
-	if err := s.db.Create(&rates).Error; err != nil {
-		return fmt.Errorf("store rates: %w", err)
-	}
 
-	log.Printf("currency: refreshed %d exchange rates (base: %s)", len(rates), payload.Base)
-	return nil
+	// Soft-delete all existing rates for this base so the unique index stays clean,
+	// then bulk-insert new rates — wrapped in a transaction so a failed create
+	// never leaves the table empty.
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where(`"baseCurrency" = ?`, payload.Base).Delete(&ExchangeRate{}).Error; err != nil {
+			return fmt.Errorf("clear old rates: %w", err)
+		}
+		if err := tx.Create(&rates).Error; err != nil {
+			return fmt.Errorf("store rates: %w", err)
+		}
+		log.Printf("currency: refreshed %d exchange rates (base: %s)", len(rates), payload.Base)
+		return nil
+	})
 }
 
 func (s *Service) Convert(amount float64, from, to string) (float64, error) {
@@ -86,7 +90,7 @@ func (s *Service) Convert(amount float64, from, to string) (float64, error) {
 	if len(needed) > 0 {
 		var rows []ExchangeRate
 		if err := s.db.
-			Where(`"baseCurrency" = 'USD' AND "targetCurrency" IN ?`, needed).
+			Where(`"baseCurrency" = ? AND "targetCurrency" IN ?`, "USD", needed).
 			Order(`"fetchedAt" DESC`).
 			Find(&rows).Error; err != nil {
 			return 0, err

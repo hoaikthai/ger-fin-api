@@ -2,6 +2,7 @@ package currency
 
 import (
 	"testing"
+	"time"
 
 	"ger_fin_api/internal/testutil"
 	"github.com/stretchr/testify/assert"
@@ -33,12 +34,12 @@ func TestRealDB_Currency_Convert_WithSeededRate(t *testing.T) {
 
 	// Seed EUR rate: 1 USD = 0.92 EUR
 	rate := ExchangeRate{
-		BaseCurrency: "USD", TargetCurrency: "EUR", Rate: 0.92,
+		BaseCurrency:   "USD",
+		TargetCurrency: "EUR",
+		Rate:           0.92,
+		FetchedAt:      time.Now(),
 	}
-	rate.FetchedAt = rate.CreatedAt
 	require.NoError(t, db.Create(&rate).Error)
-	// Manually set fetchedAt since it must be non-zero
-	require.NoError(t, db.Exec(`UPDATE "exchangeRate" SET "fetchedAt" = NOW() WHERE id = ?`, rate.ID).Error)
 
 	// 100 EUR → USD: 100 / 0.92 ≈ 108.70
 	result, err := svc.Convert(100.0, "EUR", "USD")
