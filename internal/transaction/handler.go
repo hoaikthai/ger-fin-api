@@ -38,6 +38,18 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, auth gin.HandlerFunc) {
 	a.GET("/:id/transactions", h.getByAccount)
 }
 
+// @Summary		Create transaction
+// @Description	Create a new income or expense transaction
+// @Tags		transactions
+// @Accept		json
+// @Produce		json
+// @Param		body body CreateTransactionDto true "Transaction details"
+// @Success		201 {object} Transaction
+// @Failure		400 {object} common.ErrorResponse
+// @Failure		401 {object} common.ErrorResponse
+// @Failure		404 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/transactions [post]
 func (h *Handler) create(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 
@@ -54,6 +66,16 @@ func (h *Handler) create(c *gin.Context) {
 	c.JSON(201, tx)
 }
 
+// @Summary		List transactions
+// @Description	Get all transactions for the authenticated user within the given time period
+// @Tags		transactions
+// @Produce		json
+// @Param		period query string  false "Time period" Enums(day, week, month, quarter, year) default(month)
+// @Param		offset query integer false "Period offset (negative = past)"                  default(0)
+// @Success		200 {array} Transaction
+// @Failure		401 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/transactions [get]
 func (h *Handler) findAll(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 	period, offset := parseTimeQuery(c)
@@ -66,6 +88,16 @@ func (h *Handler) findAll(c *gin.Context) {
 	c.JSON(200, txs)
 }
 
+// @Summary		Get transaction
+// @Description	Get a single transaction by ID
+// @Tags		transactions
+// @Produce		json
+// @Param		id path string true "Transaction ID"
+// @Success		200 {object} Transaction
+// @Failure		401 {object} common.ErrorResponse
+// @Failure		404 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/transactions/{id} [get]
 func (h *Handler) findOne(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 
@@ -77,6 +109,19 @@ func (h *Handler) findOne(c *gin.Context) {
 	c.JSON(200, tx)
 }
 
+// @Summary		Update transaction
+// @Description	Update a transaction's fields
+// @Tags		transactions
+// @Accept		json
+// @Produce		json
+// @Param		id   path string               true "Transaction ID"
+// @Param		body body UpdateTransactionDto true "Fields to update"
+// @Success		200 {object} Transaction
+// @Failure		400 {object} common.ErrorResponse
+// @Failure		401 {object} common.ErrorResponse
+// @Failure		404 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/transactions/{id} [patch]
 func (h *Handler) update(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 
@@ -93,6 +138,16 @@ func (h *Handler) update(c *gin.Context) {
 	c.JSON(200, tx)
 }
 
+// @Summary		Delete transaction
+// @Description	Soft-delete a transaction by ID
+// @Tags		transactions
+// @Produce		json
+// @Param		id path string true "Transaction ID"
+// @Success		200 {object} common.MessageResponse
+// @Failure		401 {object} common.ErrorResponse
+// @Failure		404 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/transactions/{id} [delete]
 func (h *Handler) remove(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 
@@ -103,6 +158,18 @@ func (h *Handler) remove(c *gin.Context) {
 	c.JSON(200, gin.H{"message": "Transaction deleted successfully"})
 }
 
+// @Summary		Get transactions by account
+// @Description	Get all transactions for a specific account within the given time period
+// @Tags		accounts
+// @Produce		json
+// @Param		id     path  string  true  "Account ID"
+// @Param		period query string  false "Time period" Enums(day, week, month, quarter, year) default(month)
+// @Param		offset query integer false "Period offset (negative = past)"                  default(0)
+// @Success		200 {array} Transaction
+// @Failure		401 {object} common.ErrorResponse
+// @Failure		404 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/accounts/{id}/transactions [get]
 func (h *Handler) getByAccount(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 	period, offset := parseTimeQuery(c)
@@ -115,6 +182,18 @@ func (h *Handler) getByAccount(c *gin.Context) {
 	c.JSON(200, txs)
 }
 
+// @Summary		Create transfer
+// @Description	Transfer funds between two accounts (creates paired expense + income transactions)
+// @Tags		transfers
+// @Accept		json
+// @Produce		json
+// @Param		body body CreateTransferDto true "Transfer details"
+// @Success		201 {object} TransferResult
+// @Failure		400 {object} common.ErrorResponse
+// @Failure		401 {object} common.ErrorResponse
+// @Failure		404 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/transfers [post]
 func (h *Handler) createTransfer(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 
@@ -131,6 +210,17 @@ func (h *Handler) createTransfer(c *gin.Context) {
 	c.JSON(201, result)
 }
 
+// @Summary		Import transactions from CSV
+// @Description	Bulk-import transactions from a CSV file. Required columns: Date, Category, Amount, Currency, Wallet. Optional: Note.
+// @Tags		transactions
+// @Accept		multipart/form-data
+// @Produce		json
+// @Param		file formData file true "CSV file"
+// @Success		201 {object} ImportResult
+// @Failure		400 {object} common.ErrorResponse
+// @Failure		401 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/transactions/import [post]
 func (h *Handler) importCsv(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 

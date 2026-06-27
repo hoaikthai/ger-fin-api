@@ -26,6 +26,17 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, auth gin.HandlerFunc) {
 	g.DELETE("/:id", h.remove)
 }
 
+// @Summary		Create category
+// @Description	Create a custom transaction category (max 2 nesting levels)
+// @Tags		categories
+// @Accept		json
+// @Produce		json
+// @Param		body body CreateCategoryDto true "Category details"
+// @Success		201 {object} Category
+// @Failure		400 {object} common.ErrorResponse
+// @Failure		401 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/categories [post]
 func (h *Handler) create(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 
@@ -42,6 +53,15 @@ func (h *Handler) create(c *gin.Context) {
 	c.JSON(201, cat)
 }
 
+// @Summary		List categories
+// @Description	Get all categories visible to the user (defaults + their own). Filter by type with ?type=income|expense
+// @Tags		categories
+// @Produce		json
+// @Param		type query string false "Transaction type filter" Enums(income, expense)
+// @Success		200 {array} Category
+// @Failure		401 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/categories [get]
 func (h *Handler) findAll(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 
@@ -64,6 +84,17 @@ func (h *Handler) findAll(c *gin.Context) {
 	c.JSON(200, cats)
 }
 
+// @Summary		Get category
+// @Description	Get a single category by ID
+// @Tags		categories
+// @Produce		json
+// @Param		id path string true "Category ID"
+// @Success		200 {object} Category
+// @Failure		401 {object} common.ErrorResponse
+// @Failure		403 {object} common.ErrorResponse
+// @Failure		404 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/categories/{id} [get]
 func (h *Handler) findOne(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 
@@ -75,6 +106,20 @@ func (h *Handler) findOne(c *gin.Context) {
 	c.JSON(200, cat)
 }
 
+// @Summary		Update category
+// @Description	Update a user-owned category (default categories cannot be updated)
+// @Tags		categories
+// @Accept		json
+// @Produce		json
+// @Param		id   path string           true "Category ID"
+// @Param		body body UpdateCategoryDto true "Fields to update"
+// @Success		200 {object} Category
+// @Failure		400 {object} common.ErrorResponse
+// @Failure		401 {object} common.ErrorResponse
+// @Failure		403 {object} common.ErrorResponse
+// @Failure		404 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/categories/{id} [patch]
 func (h *Handler) update(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 
@@ -91,6 +136,18 @@ func (h *Handler) update(c *gin.Context) {
 	c.JSON(200, cat)
 }
 
+// @Summary		Delete category
+// @Description	Delete a user-owned category (cannot delete if it has active transactions or child categories)
+// @Tags		categories
+// @Produce		json
+// @Param		id path string true "Category ID"
+// @Success		200 {object} common.MessageResponse
+// @Failure		400 {object} common.ErrorResponse
+// @Failure		401 {object} common.ErrorResponse
+// @Failure		403 {object} common.ErrorResponse
+// @Failure		404 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/categories/{id} [delete]
 func (h *Handler) remove(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 

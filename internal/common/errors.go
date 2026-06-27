@@ -45,6 +45,18 @@ func RespondError(c *gin.Context, err *AppError) {
 	})
 }
 
+// ErrorResponse is the standard error envelope returned by all endpoints.
+type ErrorResponse struct {
+	StatusCode int         `json:"statusCode"`
+	Message    interface{} `json:"message"`
+	Error      string      `json:"error"`
+}
+
+// MessageResponse is returned by delete endpoints.
+type MessageResponse struct {
+	Message string `json:"message"`
+}
+
 func RespondInternalError(c *gin.Context) {
 	c.JSON(500, gin.H{
 		"statusCode": 500,

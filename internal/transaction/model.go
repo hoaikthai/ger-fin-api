@@ -3,8 +3,8 @@ package transaction
 import (
 	"time"
 
-	accPkg "ger_fin_api/internal/account"
-	catPkg "ger_fin_api/internal/category"
+	"ger_fin_api/internal/account"
+	"ger_fin_api/internal/category"
 	"ger_fin_api/internal/common"
 )
 
@@ -14,10 +14,10 @@ type Transaction struct {
 	Amount                 float64             `gorm:"column:amount;type:numeric(15,2);not null"  json:"amount"`
 	Description            string              `gorm:"column:description;not null"               json:"description"`
 	CategoryId             string              `gorm:"column:categoryId;type:uuid;not null"       json:"categoryId"`
-	Category               *catPkg.Category    `gorm:"foreignKey:CategoryId"                     json:"category,omitempty"`
+	Category               *category.Category  `gorm:"foreignKey:CategoryId"                     json:"category,omitempty"`
 	UserId                 string              `gorm:"column:userId;type:uuid;not null"           json:"userId"`
 	AccountId              string              `gorm:"column:accountId;type:uuid;not null"        json:"accountId"`
-	Account                *accPkg.Account     `gorm:"foreignKey:AccountId"                      json:"account,omitempty"`
+	Account                *account.Account    `gorm:"foreignKey:AccountId"                      json:"account,omitempty"`
 	TransactionDate        time.Time           `gorm:"column:transactionDate"                    json:"transactionDate"`
 	RelatedTransactionId   *string             `gorm:"column:relatedTransactionId;type:uuid"     json:"relatedTransactionId,omitempty"`
 	RecurringTransactionId *string             `gorm:"column:recurringTransactionId;type:uuid"   json:"recurringTransactionId,omitempty"`

@@ -11,3 +11,8 @@ type LoginDto struct {
 	Email    string `json:"email"    binding:"required,email"`
 	Password string `json:"password" binding:"required"`
 }
+
+// LoginResponse is the response body for a successful login.
+type LoginResponse struct {
+	AccessToken string `json:"access_token"`
+}

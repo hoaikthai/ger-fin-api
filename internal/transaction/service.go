@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	accPkg "ger_fin_api/internal/account"
-	catPkg "ger_fin_api/internal/category"
+	"ger_fin_api/internal/account"
+	"ger_fin_api/internal/category"
 	"ger_fin_api/internal/common"
 
 	"gorm.io/gorm"
@@ -72,7 +72,7 @@ func validateAmountSign(txType common.TransactionType, amount float64) error {
 }
 
 func (s *Service) Create(dto CreateTransactionDto, userId string) (*Transaction, error) {
-	var acc accPkg.Account
+	var acc account.Account
 	if err := s.db.Where("id = ? AND \"userId\" = ?", dto.AccountId, userId).First(&acc).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, common.NewNotFound("Account not found")
@@ -80,7 +80,7 @@ func (s *Service) Create(dto CreateTransactionDto, userId string) (*Transaction,
 		return nil, err
 	}
 
-	var cat catPkg.Category
+	var cat category.Category
 	if err := s.db.First(&cat, "id = ?", dto.CategoryId).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, common.NewNotFound("Category not found")
@@ -149,7 +149,7 @@ func (s *Service) Update(id string, dto UpdateTransactionDto, userId string) (*T
 	}
 
 	if dto.AccountId != nil {
-		var acc accPkg.Account
+		var acc account.Account
 		if err := s.db.Where("id = ? AND \"userId\" = ?", *dto.AccountId, userId).First(&acc).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
 				return nil, common.NewNotFound("Account not found")
@@ -159,7 +159,7 @@ func (s *Service) Update(id string, dto UpdateTransactionDto, userId string) (*T
 	}
 
 	if dto.CategoryId != nil {
-		var cat catPkg.Category
+		var cat category.Category
 		if err := s.db.First(&cat, "id = ?", *dto.CategoryId).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
 				return nil, common.NewNotFound("Category not found")
@@ -218,7 +218,7 @@ func (s *Service) Remove(id, userId string) error {
 }
 
 func (s *Service) FindByAccount(accountId, userId string, period common.TimePeriod, offset int) ([]Transaction, error) {
-	var acc accPkg.Account
+	var acc account.Account
 	if err := s.db.Where("id = ? AND \"userId\" = ?", accountId, userId).First(&acc).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, common.NewNotFound("Account not found")
@@ -240,7 +240,7 @@ func (s *Service) Transfer(dto CreateTransferDto, userId string) (*TransferResul
 		return nil, common.NewBadRequest("Source and destination accounts cannot be the same")
 	}
 
-	var srcAcc accPkg.Account
+	var srcAcc account.Account
 	if err := s.db.Where("id = ? AND \"userId\" = ?", dto.SourceAccountId, userId).First(&srcAcc).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, common.NewNotFound("Source account not found")
@@ -248,7 +248,7 @@ func (s *Service) Transfer(dto CreateTransferDto, userId string) (*TransferResul
 		return nil, err
 	}
 
-	var dstAcc accPkg.Account
+	var dstAcc account.Account
 	if err := s.db.Where("id = ? AND \"userId\" = ?", dto.DestinationAccountId, userId).First(&dstAcc).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, common.NewNotFound("Destination account not found")
@@ -256,12 +256,12 @@ func (s *Service) Transfer(dto CreateTransferDto, userId string) (*TransferResul
 		return nil, err
 	}
 
-	var outCat catPkg.Category
+	var outCat category.Category
 	if err := s.db.Where("name = ? AND \"isDefault\" = ? AND type = ?", "Outgoing transfer", true, "expense").First(&outCat).Error; err != nil {
 		return nil, common.NewNotFound("Outgoing transfer category not found")
 	}
 
-	var inCat catPkg.Category
+	var inCat category.Category
 	if err := s.db.Where("name = ? AND \"isDefault\" = ? AND type = ?", "Incoming transfer", true, "income").First(&inCat).Error; err != nil {
 		return nil, common.NewNotFound("Incoming transfer category not found")
 	}
@@ -327,21 +327,21 @@ func (s *Service) ImportFromCsv(csvData []byte, userId string) (*ImportResult, e
 	rows := records[1:]
 
 	// Load user accounts and categories once
-	var userAccounts []accPkg.Account
+	var userAccounts []account.Account
 	if err := s.db.Where("\"userId\" = ?", userId).Find(&userAccounts).Error; err != nil {
 		return nil, err
 	}
 
-	var userCategories []catPkg.Category
+	var userCategories []category.Category
 	if err := s.db.Where("\"userId\" = ? OR \"isDefault\" = ?", userId, true).Find(&userCategories).Error; err != nil {
 		return nil, err
 	}
 
-	accByName := make(map[string]*accPkg.Account, len(userAccounts))
+	accByName := make(map[string]*account.Account, len(userAccounts))
 	for i := range userAccounts {
 		accByName[userAccounts[i].Name] = &userAccounts[i]
 	}
-	catByName := make(map[string]*catPkg.Category, len(userCategories))
+	catByName := make(map[string]*category.Category, len(userCategories))
 	for i := range userCategories {
 		catByName[userCategories[i].Name] = &userCategories[i]
 	}

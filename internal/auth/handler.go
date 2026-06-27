@@ -22,6 +22,16 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup) {
 	g.POST("/login", h.login)
 }
 
+// @Summary		Register a new user
+// @Description	Create a new user account with email and password
+// @Tags		auth
+// @Accept		json
+// @Produce		json
+// @Param		body body RegisterDto true "Registration details"
+// @Success		201 {object} user.User
+// @Failure		400 {object} common.ErrorResponse
+// @Failure		409 {object} common.ErrorResponse
+// @Router		/auth/register [post]
 func (h *Handler) register(c *gin.Context) {
 	var dto RegisterDto
 	if !common.BindJSON(c, &dto) {
@@ -42,6 +52,16 @@ func (h *Handler) register(c *gin.Context) {
 	c.JSON(201, u)
 }
 
+// @Summary		Login
+// @Description	Authenticate with email and password, receive a JWT access token
+// @Tags		auth
+// @Accept		json
+// @Produce		json
+// @Param		body body LoginDto true "Login credentials"
+// @Success		200 {object} LoginResponse
+// @Failure		400 {object} common.ErrorResponse
+// @Failure		401 {object} common.ErrorResponse
+// @Router		/auth/login [post]
 func (h *Handler) login(c *gin.Context) {
 	var dto LoginDto
 	if !common.BindJSON(c, &dto) {

@@ -17,9 +17,6 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-// RegisterRoutes registers all account CRUD routes on the provided group.
-// The GET /:id/transactions route is registered separately in the transaction
-// module via RegisterAccountTransactionsRoute, since it depends on TransactionService.
 func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, auth gin.HandlerFunc) {
 	g := rg.Group("/accounts", auth)
 	g.POST("", h.create)
@@ -29,6 +26,17 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, auth gin.HandlerFunc) {
 	g.DELETE("/:id", h.remove)
 }
 
+// @Summary		Create account
+// @Description	Create a new financial account for the authenticated user
+// @Tags		accounts
+// @Accept		json
+// @Produce		json
+// @Param		body body CreateAccountDto true "Account details"
+// @Success		201 {object} Account
+// @Failure		400 {object} common.ErrorResponse
+// @Failure		401 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/accounts [post]
 func (h *Handler) create(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 
@@ -51,6 +59,14 @@ func (h *Handler) create(c *gin.Context) {
 	c.JSON(201, a)
 }
 
+// @Summary		List accounts
+// @Description	Get all financial accounts for the authenticated user
+// @Tags		accounts
+// @Produce		json
+// @Success		200 {array} Account
+// @Failure		401 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/accounts [get]
 func (h *Handler) findAll(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 
@@ -63,6 +79,16 @@ func (h *Handler) findAll(c *gin.Context) {
 	c.JSON(200, accounts)
 }
 
+// @Summary		Get account
+// @Description	Get a single account by ID
+// @Tags		accounts
+// @Produce		json
+// @Param		id path string true "Account ID"
+// @Success		200 {object} Account
+// @Failure		401 {object} common.ErrorResponse
+// @Failure		404 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/accounts/{id} [get]
 func (h *Handler) findOne(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 	id := c.Param("id")
@@ -81,6 +107,19 @@ func (h *Handler) findOne(c *gin.Context) {
 	c.JSON(200, a)
 }
 
+// @Summary		Update account
+// @Description	Update an account's details
+// @Tags		accounts
+// @Accept		json
+// @Produce		json
+// @Param		id   path string           true "Account ID"
+// @Param		body body UpdateAccountDto true "Fields to update"
+// @Success		200 {object} Account
+// @Failure		400 {object} common.ErrorResponse
+// @Failure		401 {object} common.ErrorResponse
+// @Failure		404 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/accounts/{id} [patch]
 func (h *Handler) update(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 	id := c.Param("id")
@@ -104,6 +143,16 @@ func (h *Handler) update(c *gin.Context) {
 	c.JSON(200, a)
 }
 
+// @Summary		Delete account
+// @Description	Soft-delete an account by ID
+// @Tags		accounts
+// @Produce		json
+// @Param		id path string true "Account ID"
+// @Success		200 {object} common.MessageResponse
+// @Failure		401 {object} common.ErrorResponse
+// @Failure		404 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/accounts/{id} [delete]
 func (h *Handler) remove(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 	id := c.Param("id")

@@ -23,6 +23,15 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, auth gin.HandlerFunc) {
 	g.PUT("/me", h.updateProfile)
 }
 
+// @Summary		Get current user profile
+// @Description	Returns the authenticated user's profile
+// @Tags		users
+// @Produce		json
+// @Success		200 {object} User
+// @Failure		401 {object} common.ErrorResponse
+// @Failure		404 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/users/me [get]
 func (h *Handler) getProfile(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 
@@ -40,6 +49,18 @@ func (h *Handler) getProfile(c *gin.Context) {
 	c.JSON(200, u)
 }
 
+// @Summary		Update current user profile
+// @Description	Update the authenticated user's first and last name
+// @Tags		users
+// @Accept		json
+// @Produce		json
+// @Param		body body UpdateProfileDto true "Profile fields to update"
+// @Success		200 {object} User
+// @Failure		400 {object} common.ErrorResponse
+// @Failure		401 {object} common.ErrorResponse
+// @Failure		404 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/users/me [put]
 func (h *Handler) updateProfile(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 
