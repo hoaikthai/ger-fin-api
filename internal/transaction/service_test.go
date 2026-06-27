@@ -5,114 +5,452 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 
+	"ger_fin_api/internal/account"
+	"ger_fin_api/internal/category"
 	"ger_fin_api/internal/common"
+	"ger_fin_api/internal/testutil"
+	"ger_fin_api/internal/user"
 )
 
-// ─── validateAmountSign ──────────────────────────────────────────────────────
-
-func TestValidateAmountSign_IncomePositive(t *testing.T) {
-	assert.NoError(t, validateAmountSign(common.TransactionTypeIncome, 100.0))
+func seedUser(t *testing.T, db *gorm.DB) string {
+	t.Helper()
+	userSvc := user.NewService(db)
+	u := &user.User{Email: "test-" + uuid.New().String() + "@example.com", Password: "hashed"}
+	created, err := userSvc.Create(u)
+	require.NoError(t, err)
+	return created.ID
 }
 
-func TestValidateAmountSign_IncomeZero(t *testing.T) {
-	err := validateAmountSign(common.TransactionTypeIncome, 0)
+func seedAccount(t *testing.T, db *gorm.DB, userId string) *account.Account {
+	t.Helper()
+	svc := account.NewService(db)
+	a, err := svc.Create(userId, account.CreateAccountDto{Name: "Test", Currency: "USD", Balance: 1000})
+	require.NoError(t, err)
+	return a
+}
+
+func seedAccountNamed(t *testing.T, db *gorm.DB, userId, name string) *account.Account {
+	t.Helper()
+	svc := account.NewService(db)
+	a, err := svc.Create(userId, account.CreateAccountDto{Name: name, Currency: "USD", Balance: 1000})
+	require.NoError(t, err)
+	return a
+}
+
+func seedCategory(t *testing.T, db *gorm.DB, userId string, typ common.TransactionType) *category.Category {
+	t.Helper()
+	svc := category.NewService(db)
+	cat, err := svc.Create(category.CreateCategoryDto{Name: "Test Cat " + uuid.New().String(), Type: typ}, userId)
+	require.NoError(t, err)
+	return cat
+}
+
+func seedDefaultCategories(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	svc := category.NewService(db)
+	err := svc.SeedDefaultCategories()
+	require.NoError(t, err)
+}
+
+func TestRealDB_Transaction_Create_Income(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	userId := seedUser(t, db)
+	acc := seedAccount(t, db, userId)
+	cat := seedCategory(t, db, userId, common.TransactionTypeIncome)
+
+	result, err := svc.Create(CreateTransactionDto{
+		Type:        common.TransactionTypeIncome,
+		Amount:      100,
+		Description: "Salary payment",
+		CategoryId:  cat.ID,
+		AccountId:   acc.ID,
+	}, userId)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.NotEmpty(t, result.ID)
+	assert.Equal(t, 100.0, result.Amount)
+	assert.Equal(t, string(common.TransactionTypeIncome), result.Type)
+
+	var stored Transaction
+	err = db.First(&stored, "id = ?", result.ID).Error
+	require.NoError(t, err)
+	assert.Equal(t, 100.0, stored.Amount)
+	assert.Equal(t, string(common.TransactionTypeIncome), stored.Type)
+}
+
+func TestRealDB_Transaction_Create_Expense(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	userId := seedUser(t, db)
+	acc := seedAccount(t, db, userId)
+	cat := seedCategory(t, db, userId, common.TransactionTypeExpense)
+
+	result, err := svc.Create(CreateTransactionDto{
+		Type:        common.TransactionTypeExpense,
+		Amount:      -50,
+		Description: "Groceries",
+		CategoryId:  cat.ID,
+		AccountId:   acc.ID,
+	}, userId)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.NotEmpty(t, result.ID)
+	assert.Equal(t, -50.0, result.Amount)
+	assert.Equal(t, string(common.TransactionTypeExpense), result.Type)
+
+	var stored Transaction
+	err = db.First(&stored, "id = ?", result.ID).Error
+	require.NoError(t, err)
+	assert.Equal(t, -50.0, stored.Amount)
+}
+
+func TestRealDB_Transaction_Create_WrongAmountSign(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	userId := seedUser(t, db)
+	acc := seedAccount(t, db, userId)
+	incomeCat := seedCategory(t, db, userId, common.TransactionTypeIncome)
+	expenseCat := seedCategory(t, db, userId, common.TransactionTypeExpense)
+
+	_, err := svc.Create(CreateTransactionDto{
+		Type:        common.TransactionTypeIncome,
+		Amount:      -100,
+		Description: "Bad income",
+		CategoryId:  incomeCat.ID,
+		AccountId:   acc.ID,
+	}, userId)
+	require.Error(t, err)
+	var appErr *common.AppError
+	require.True(t, errors.As(err, &appErr))
+	assert.Equal(t, 400, appErr.Code)
+
+	_, err = svc.Create(CreateTransactionDto{
+		Type:        common.TransactionTypeExpense,
+		Amount:      50,
+		Description: "Bad expense",
+		CategoryId:  expenseCat.ID,
+		AccountId:   acc.ID,
+	}, userId)
+	require.Error(t, err)
+	require.True(t, errors.As(err, &appErr))
+	assert.Equal(t, 400, appErr.Code)
+}
+
+func TestRealDB_Transaction_Create_CategoryTypeMismatch(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	userId := seedUser(t, db)
+	acc := seedAccount(t, db, userId)
+	expenseCat := seedCategory(t, db, userId, common.TransactionTypeExpense)
+
+	_, err := svc.Create(CreateTransactionDto{
+		Type:        common.TransactionTypeIncome,
+		Amount:      100,
+		Description: "Income with expense category",
+		CategoryId:  expenseCat.ID,
+		AccountId:   acc.ID,
+	}, userId)
+
 	require.Error(t, err)
 	var appErr *common.AppError
 	require.True(t, errors.As(err, &appErr))
 	assert.Equal(t, 400, appErr.Code)
 }
 
-func TestValidateAmountSign_IncomeNegative(t *testing.T) {
-	err := validateAmountSign(common.TransactionTypeIncome, -50.0)
+func TestRealDB_Transaction_FindAll(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	userA := seedUser(t, db)
+	userB := seedUser(t, db)
+	accA := seedAccount(t, db, userA)
+	accB := seedAccount(t, db, userB)
+	catA := seedCategory(t, db, userA, common.TransactionTypeIncome)
+	catB := seedCategory(t, db, userB, common.TransactionTypeIncome)
+
+	now := time.Now()
+	for i := 0; i < 2; i++ {
+		_, err := svc.Create(CreateTransactionDto{
+			Type:            common.TransactionTypeIncome,
+			Amount:          100,
+			Description:     "Income",
+			CategoryId:      catA.ID,
+			AccountId:       accA.ID,
+			TransactionDate: &now,
+		}, userA)
+		require.NoError(t, err)
+	}
+
+	_, err := svc.Create(CreateTransactionDto{
+		Type:            common.TransactionTypeIncome,
+		Amount:          200,
+		Description:     "Other user income",
+		CategoryId:      catB.ID,
+		AccountId:       accB.ID,
+		TransactionDate: &now,
+	}, userB)
+	require.NoError(t, err)
+
+	results, err := svc.FindAll(userA, common.TimePeriodMonth, 0)
+	require.NoError(t, err)
+	assert.Len(t, results, 2)
+	for _, tx := range results {
+		assert.Equal(t, userA, tx.UserId)
+	}
+}
+
+func TestRealDB_Transaction_FindOne_Success(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	userId := seedUser(t, db)
+	acc := seedAccount(t, db, userId)
+	cat := seedCategory(t, db, userId, common.TransactionTypeIncome)
+
+	created, err := svc.Create(CreateTransactionDto{
+		Type:        common.TransactionTypeIncome,
+		Amount:      75,
+		Description: "Test income",
+		CategoryId:  cat.ID,
+		AccountId:   acc.ID,
+	}, userId)
+	require.NoError(t, err)
+
+	found, err := svc.FindOne(created.ID, userId)
+	require.NoError(t, err)
+	require.NotNil(t, found)
+	assert.Equal(t, created.ID, found.ID)
+	assert.Equal(t, 75.0, found.Amount)
+}
+
+func TestRealDB_Transaction_FindOne_NotFound(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	userId := seedUser(t, db)
+
+	_, err := svc.FindOne(uuid.New().String(), userId)
 	require.Error(t, err)
 	var appErr *common.AppError
 	require.True(t, errors.As(err, &appErr))
-	assert.Equal(t, 400, appErr.Code)
+	assert.Equal(t, 404, appErr.Code)
 }
 
-func TestValidateAmountSign_ExpenseNegative(t *testing.T) {
-	assert.NoError(t, validateAmountSign(common.TransactionTypeExpense, -100.0))
-}
+func TestRealDB_Transaction_FindOne_WrongUser(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
 
-func TestValidateAmountSign_ExpenseZero(t *testing.T) {
-	err := validateAmountSign(common.TransactionTypeExpense, 0)
+	userId := seedUser(t, db)
+	otherUser := seedUser(t, db)
+	acc := seedAccount(t, db, userId)
+	cat := seedCategory(t, db, userId, common.TransactionTypeIncome)
+
+	created, err := svc.Create(CreateTransactionDto{
+		Type:        common.TransactionTypeIncome,
+		Amount:      50,
+		Description: "Private income",
+		CategoryId:  cat.ID,
+		AccountId:   acc.ID,
+	}, userId)
+	require.NoError(t, err)
+
+	_, err = svc.FindOne(created.ID, otherUser)
 	require.Error(t, err)
 	var appErr *common.AppError
 	require.True(t, errors.As(err, &appErr))
-	assert.Equal(t, 400, appErr.Code)
+	assert.Equal(t, 404, appErr.Code)
 }
 
-func TestValidateAmountSign_ExpensePositive(t *testing.T) {
-	err := validateAmountSign(common.TransactionTypeExpense, 50.0)
+func TestRealDB_Transaction_Update(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	userId := seedUser(t, db)
+	acc := seedAccount(t, db, userId)
+	cat := seedCategory(t, db, userId, common.TransactionTypeIncome)
+
+	created, err := svc.Create(CreateTransactionDto{
+		Type:        common.TransactionTypeIncome,
+		Amount:      100,
+		Description: "Original",
+		CategoryId:  cat.ID,
+		AccountId:   acc.ID,
+	}, userId)
+	require.NoError(t, err)
+
+	newDesc := "Updated description"
+	newAmount := 250.0
+	updated, err := svc.Update(created.ID, UpdateTransactionDto{
+		Description: &newDesc,
+		Amount:      &newAmount,
+	}, userId)
+	require.NoError(t, err)
+	require.NotNil(t, updated)
+	assert.Equal(t, newDesc, updated.Description)
+	assert.Equal(t, newAmount, updated.Amount)
+
+	var stored Transaction
+	err = db.First(&stored, "id = ?", created.ID).Error
+	require.NoError(t, err)
+	assert.Equal(t, newDesc, stored.Description)
+	assert.Equal(t, newAmount, stored.Amount)
+}
+
+func TestRealDB_Transaction_Remove(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	userId := seedUser(t, db)
+	acc := seedAccount(t, db, userId)
+	cat := seedCategory(t, db, userId, common.TransactionTypeExpense)
+
+	created, err := svc.Create(CreateTransactionDto{
+		Type:        common.TransactionTypeExpense,
+		Amount:      -30,
+		Description: "To be deleted",
+		CategoryId:  cat.ID,
+		AccountId:   acc.ID,
+	}, userId)
+	require.NoError(t, err)
+
+	err = svc.Remove(created.ID, userId)
+	require.NoError(t, err)
+
+	_, err = svc.FindOne(created.ID, userId)
 	require.Error(t, err)
 	var appErr *common.AppError
 	require.True(t, errors.As(err, &appErr))
-	assert.Equal(t, 400, appErr.Code)
+	assert.Equal(t, 404, appErr.Code)
+
+	var softDeleted Transaction
+	err = db.Unscoped().First(&softDeleted, "id = ?", created.ID).Error
+	require.NoError(t, err)
+	assert.True(t, softDeleted.DeletedAt.Valid)
 }
 
-// ─── getDateRange ─────────────────────────────────────────────────────────────
+func TestRealDB_Transaction_FindByAccount(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
 
-func TestGetDateRange_Month_CurrentPeriod(t *testing.T) {
+	seedDefaultCategories(t, db)
+
+	userId := seedUser(t, db)
+	accA := seedAccount(t, db, userId)
+	accB := seedAccount(t, db, userId)
+	cat := seedCategory(t, db, userId, common.TransactionTypeIncome)
+
 	now := time.Now()
-	result := getDateRange(common.TimePeriodMonth, 0)
-	assert.Equal(t, now.Year(), result.Year())
-	assert.Equal(t, now.Month(), result.Month())
-	assert.Equal(t, 1, result.Day())
-	assert.Equal(t, 0, result.Hour())
-	assert.Equal(t, 0, result.Minute())
+	for i := 0; i < 2; i++ {
+		_, err := svc.Create(CreateTransactionDto{
+			Type:            common.TransactionTypeIncome,
+			Amount:          100,
+			Description:     "Income for account A",
+			CategoryId:      cat.ID,
+			AccountId:       accA.ID,
+			TransactionDate: &now,
+		}, userId)
+		require.NoError(t, err)
+	}
+
+	_, err := svc.Create(CreateTransactionDto{
+		Type:            common.TransactionTypeIncome,
+		Amount:          200,
+		Description:     "Income for account B",
+		CategoryId:      cat.ID,
+		AccountId:       accB.ID,
+		TransactionDate: &now,
+	}, userId)
+	require.NoError(t, err)
+
+	results, err := svc.FindByAccount(accA.ID, userId, common.TimePeriodMonth, 0)
+	require.NoError(t, err)
+	assert.Len(t, results, 2)
+	for _, tx := range results {
+		assert.Equal(t, accA.ID, tx.AccountId)
+	}
 }
 
-func TestGetDateRange_Month_PreviousPeriod(t *testing.T) {
-	now := time.Now()
-	result := getDateRange(common.TimePeriodMonth, -1)
+func TestRealDB_Transaction_Transfer(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
 
-	expected := now.AddDate(0, -1, 0)
-	assert.Equal(t, expected.Year(), result.Year())
-	assert.Equal(t, expected.Month(), result.Month())
-	assert.Equal(t, 1, result.Day())
+	seedDefaultCategories(t, db)
+
+	userId := seedUser(t, db)
+	srcAcc := seedAccount(t, db, userId)
+	dstAcc := seedAccount(t, db, userId)
+
+	result, err := svc.Transfer(CreateTransferDto{
+		SourceAccountId:      srcAcc.ID,
+		DestinationAccountId: dstAcc.ID,
+		Amount:               200,
+		Description:          "Transfer between accounts",
+	}, userId)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.SourceTransaction)
+	require.NotNil(t, result.DestinationTransaction)
+
+	assert.Less(t, result.SourceTransaction.Amount, 0.0)
+	assert.Greater(t, result.DestinationTransaction.Amount, 0.0)
+	assert.Equal(t, string(common.TransactionTypeExpense), result.SourceTransaction.Type)
+	assert.Equal(t, string(common.TransactionTypeIncome), result.DestinationTransaction.Type)
 }
 
-func TestGetDateRange_Year_CurrentPeriod(t *testing.T) {
-	now := time.Now()
-	result := getDateRange(common.TimePeriodYear, 0)
-	assert.Equal(t, now.Year(), result.Year())
-	assert.Equal(t, time.January, result.Month())
-	assert.Equal(t, 1, result.Day())
-}
+func TestRealDB_Transaction_Transfer_SameAccount(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
 
-func TestGetDateRange_Day_CurrentPeriod(t *testing.T) {
-	now := time.Now()
-	result := getDateRange(common.TimePeriodDay, 0)
-	assert.Equal(t, now.Year(), result.Year())
-	assert.Equal(t, now.Month(), result.Month())
-	assert.Equal(t, now.Day(), result.Day())
-	assert.Equal(t, 0, result.Hour())
-}
-
-func TestGetDateRange_Month_NegativeWrapAcrossYear(t *testing.T) {
-	// Month offset that crosses a year boundary should not panic or return wrong year
-	result := getDateRange(common.TimePeriodMonth, -13)
-	assert.Equal(t, 1, result.Day())
-	// Just verify it's a valid date
-	assert.False(t, result.IsZero())
-}
-
-// ─── Transfer business rules ──────────────────────────────────────────────────
-
-func TestTransfer_SameAccountReturnsError(t *testing.T) {
-	svc := &Service{db: nil} // DB never reached — validation fires first
+	userId := seedUser(t, db)
+	acc := seedAccount(t, db, userId)
 
 	_, err := svc.Transfer(CreateTransferDto{
-		SourceAccountId:      "same-uuid",
-		DestinationAccountId: "same-uuid",
+		SourceAccountId:      acc.ID,
+		DestinationAccountId: acc.ID,
 		Amount:               100,
-	}, "user-id")
+		Description:          "Same account transfer",
+	}, userId)
 
 	require.Error(t, err)
 	var appErr *common.AppError
 	require.True(t, errors.As(err, &appErr))
 	assert.Equal(t, 400, appErr.Code)
+}
+
+func TestRealDB_Transaction_ImportFromCsv(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	seedDefaultCategories(t, db)
+
+	userId := seedUser(t, db)
+	svc2 := account.NewService(db)
+	_, err := svc2.Create(userId, account.CreateAccountDto{Name: "Wallet", Currency: "USD", Balance: 500})
+	require.NoError(t, err)
+
+	csvData := []byte("Date,Category,Amount,Currency,Wallet,Note\n2024-01-15,Food & Beverage,-15.50,USD,Wallet,Lunch\n")
+
+	importResult, err := svc.ImportFromCsv(csvData, userId)
+	require.NoError(t, err)
+	require.NotNil(t, importResult)
+	assert.Equal(t, 1, importResult.Imported)
+	assert.Empty(t, importResult.Errors)
+
+	var txs []Transaction
+	err = db.Where("\"userId\" = ?", userId).Find(&txs).Error
+	require.NoError(t, err)
+	assert.Len(t, txs, 1)
 }

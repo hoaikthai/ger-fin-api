@@ -2,115 +2,131 @@ package auth
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
-	sqlmock "github.com/DATA-DOG/go-sqlmock"
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/crypto/bcrypt"
 
 	"ger_fin_api/internal/common"
 	"ger_fin_api/internal/testutil"
 	"ger_fin_api/internal/user"
 )
 
-func newAuthSvc(t *testing.T) (*Service, sqlmock.Sqlmock) {
+func newRealAuthSvc(t *testing.T) (*Service, *user.Service) {
 	t.Helper()
-	db, mock, err := testutil.NewMockDB()
-	require.NoError(t, err)
-	return NewService(user.NewService(db), "test-secret", time.Hour), mock
+	db := testutil.NewRealDB(t)
+	userSvc := user.NewService(db)
+	authSvc := NewService(userSvc, "test-secret", 24*time.Hour)
+	return authSvc, userSvc
 }
 
-func TestRegister_Success(t *testing.T) {
-	svc, mock := newAuthSvc(t)
-
-	// FindByEmail: user not found
-	mock.ExpectQuery(`SELECT .+ FROM "user" WHERE`).
-		WillReturnRows(sqlmock.NewRows(testutil.UserCols()))
-
-	// Create user
-	mock.ExpectBegin()
-	mock.ExpectQuery(`INSERT INTO "user"`).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("new-user-uuid"))
-	mock.ExpectCommit()
-
-	u, err := svc.Register(RegisterDto{
-		Email:    "new@example.com",
-		Password: "password123",
-	})
-
-	require.NoError(t, err)
-	require.NotNil(t, u)
-	assert.Equal(t, "new@example.com", u.Email)
-	assert.NoError(t, mock.ExpectationsWereMet())
+func uniqueEmail(t *testing.T) string {
+	t.Helper()
+	return fmt.Sprintf("test-%d@example.com", time.Now().UnixNano())
 }
 
-func TestRegister_EmailConflict(t *testing.T) {
-	svc, mock := newAuthSvc(t)
+func TestRealDB_Auth_Register_Success(t *testing.T) {
+	authSvc, userSvc := newRealAuthSvc(t)
+	email := uniqueEmail(t)
+	plain := "password123"
 
-	// FindByEmail: user already exists
-	rows := sqlmock.NewRows(testutil.UserCols()).
-		AddRow("existing-id", time.Now(), time.Now(), nil, "taken@example.com", "hash", nil, nil)
-	mock.ExpectQuery(`SELECT .+ FROM "user" WHERE`).
-		WillReturnRows(rows)
+	result, err := authSvc.Register(RegisterDto{Email: email, Password: plain})
 
-	_, err := svc.Register(RegisterDto{Email: "taken@example.com", Password: "password123"})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.NotEmpty(t, result.ID)
+	assert.Equal(t, email, result.Email)
 
+	stored, err := userSvc.FindByEmail(email)
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	assert.NotEqual(t, plain, stored.Password)
+	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(stored.Password), []byte(plain)))
+}
+
+func TestRealDB_Auth_Register_DuplicateEmail(t *testing.T) {
+	authSvc, _ := newRealAuthSvc(t)
+	email := uniqueEmail(t)
+
+	_, err := authSvc.Register(RegisterDto{Email: email, Password: "password123"})
+	require.NoError(t, err)
+
+	_, err = authSvc.Register(RegisterDto{Email: email, Password: "other-password"})
 	require.Error(t, err)
+
 	var appErr *common.AppError
 	require.True(t, errors.As(err, &appErr))
 	assert.Equal(t, 409, appErr.Code)
-	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestLogin_Success(t *testing.T) {
-	svc, mock := newAuthSvc(t)
+func TestRealDB_Auth_Login_Success(t *testing.T) {
+	authSvc, _ := newRealAuthSvc(t)
+	email := uniqueEmail(t)
 
-	hash, _ := bcrypt.GenerateFromPassword([]byte("password123"), bcrypt.MinCost)
+	_, err := authSvc.Register(RegisterDto{Email: email, Password: "password123"})
+	require.NoError(t, err)
 
-	rows := sqlmock.NewRows(testutil.UserCols()).
-		AddRow("user-id-1", time.Now(), time.Now(), nil, "test@example.com", string(hash), nil, nil)
-	mock.ExpectQuery(`SELECT .+ FROM "user" WHERE`).
-		WillReturnRows(rows)
-
-	token, err := svc.Login("test@example.com", "password123")
+	token, err := authSvc.Login(email, "password123")
 
 	require.NoError(t, err)
 	assert.NotEmpty(t, token)
-	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestLogin_WrongPassword(t *testing.T) {
-	svc, mock := newAuthSvc(t)
+func TestRealDB_Auth_Login_WrongPassword(t *testing.T) {
+	authSvc, _ := newRealAuthSvc(t)
+	email := uniqueEmail(t)
 
-	hash, _ := bcrypt.GenerateFromPassword([]byte("correct-password"), bcrypt.MinCost)
+	_, err := authSvc.Register(RegisterDto{Email: email, Password: "correct-password"})
+	require.NoError(t, err)
 
-	rows := sqlmock.NewRows(testutil.UserCols()).
-		AddRow("user-id-1", time.Now(), time.Now(), nil, "test@example.com", string(hash), nil, nil)
-	mock.ExpectQuery(`SELECT .+ FROM "user" WHERE`).
-		WillReturnRows(rows)
-
-	_, err := svc.Login("test@example.com", "wrong-password")
-
+	_, err = authSvc.Login(email, "wrong-password")
 	require.Error(t, err)
+
 	var appErr *common.AppError
 	require.True(t, errors.As(err, &appErr))
 	assert.Equal(t, 401, appErr.Code)
-	assert.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestLogin_UserNotFound(t *testing.T) {
-	svc, mock := newAuthSvc(t)
+func TestRealDB_Auth_Login_UnknownEmail(t *testing.T) {
+	authSvc, _ := newRealAuthSvc(t)
 
-	mock.ExpectQuery(`SELECT .+ FROM "user" WHERE`).
-		WillReturnRows(sqlmock.NewRows(testutil.UserCols()))
-
-	_, err := svc.Login("nobody@example.com", "password123")
-
+	_, err := authSvc.Login(uniqueEmail(t), "password123")
 	require.Error(t, err)
+
 	var appErr *common.AppError
 	require.True(t, errors.As(err, &appErr))
 	assert.Equal(t, 401, appErr.Code)
-	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestRealDB_Auth_ValidateUser_Success(t *testing.T) {
+	authSvc, _ := newRealAuthSvc(t)
+	email := uniqueEmail(t)
+
+	_, err := authSvc.Register(RegisterDto{Email: email, Password: "password123"})
+	require.NoError(t, err)
+
+	u, err := authSvc.ValidateUser(email, "password123")
+
+	require.NoError(t, err)
+	require.NotNil(t, u)
+	assert.Equal(t, email, u.Email)
+}
+
+func TestRealDB_Auth_ValidateUser_WrongCredentials(t *testing.T) {
+	authSvc, _ := newRealAuthSvc(t)
+	email := uniqueEmail(t)
+
+	_, err := authSvc.Register(RegisterDto{Email: email, Password: "correct-password"})
+	require.NoError(t, err)
+
+	_, err = authSvc.ValidateUser(email, "wrong-password")
+	require.Error(t, err)
+
+	var appErr *common.AppError
+	require.True(t, errors.As(err, &appErr))
+	assert.Equal(t, 401, appErr.Code)
 }

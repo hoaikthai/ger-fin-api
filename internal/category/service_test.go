@@ -7,9 +7,20 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 	"ger_fin_api/internal/common"
 	"ger_fin_api/internal/testutil"
+	"ger_fin_api/internal/user"
 )
+
+func seedUser(t *testing.T, db *gorm.DB) string {
+	t.Helper()
+	svc := user.NewService(db)
+	u := &user.User{Email: "test-" + uuid.New().String() + "@example.com", Password: "hashed"}
+	created, err := svc.Create(u)
+	require.NoError(t, err)
+	return created.ID
+}
 
 func TestRealDB_Category_SeedDefault(t *testing.T) {
 	db := testutil.NewRealDB(t)
@@ -37,7 +48,7 @@ func TestRealDB_Category_SeedDefault(t *testing.T) {
 func TestRealDB_Category_Create_Success(t *testing.T) {
 	db := testutil.NewRealDB(t)
 	svc := NewService(db)
-	userId := uuid.New().String()
+	userId := seedUser(t, db)
 
 	cat, err := svc.Create(CreateCategoryDto{
 		Name: "Groceries",
@@ -62,7 +73,7 @@ func TestRealDB_Category_Create_Success(t *testing.T) {
 func TestRealDB_Category_Create_WithParent(t *testing.T) {
 	db := testutil.NewRealDB(t)
 	svc := NewService(db)
-	userId := uuid.New().String()
+	userId := seedUser(t, db)
 
 	parent, err := svc.Create(CreateCategoryDto{
 		Name: "Transport",
@@ -88,8 +99,9 @@ func TestRealDB_Category_Create_WithParent(t *testing.T) {
 }
 
 func TestRealDB_Category_Create_ParentTypeMismatch(t *testing.T) {
-	svc := NewService(testutil.NewRealDB(t))
-	userId := uuid.New().String()
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+	userId := seedUser(t, db)
 
 	parent, err := svc.Create(CreateCategoryDto{
 		Name: "Shopping",
@@ -110,8 +122,9 @@ func TestRealDB_Category_Create_ParentTypeMismatch(t *testing.T) {
 }
 
 func TestRealDB_Category_FindAll(t *testing.T) {
-	svc := NewService(testutil.NewRealDB(t))
-	userId := uuid.New().String()
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+	userId := seedUser(t, db)
 
 	err := svc.SeedDefaultCategories()
 	require.NoError(t, err)
@@ -128,8 +141,9 @@ func TestRealDB_Category_FindAll(t *testing.T) {
 }
 
 func TestRealDB_Category_FindAllByType(t *testing.T) {
-	svc := NewService(testutil.NewRealDB(t))
-	userId := uuid.New().String()
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+	userId := seedUser(t, db)
 
 	err := svc.SeedDefaultCategories()
 	require.NoError(t, err)
@@ -155,8 +169,9 @@ func TestRealDB_Category_FindAllByType(t *testing.T) {
 }
 
 func TestRealDB_Category_FindOne_Success(t *testing.T) {
-	svc := NewService(testutil.NewRealDB(t))
-	userId := uuid.New().String()
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+	userId := seedUser(t, db)
 
 	created, err := svc.Create(CreateCategoryDto{
 		Name: "Books",
@@ -172,8 +187,9 @@ func TestRealDB_Category_FindOne_Success(t *testing.T) {
 }
 
 func TestRealDB_Category_FindOne_NotFound(t *testing.T) {
-	svc := NewService(testutil.NewRealDB(t))
-	userId := uuid.New().String()
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+	userId := seedUser(t, db)
 
 	_, err := svc.FindOne(uuid.New().String(), userId)
 	require.Error(t, err)
@@ -186,7 +202,7 @@ func TestRealDB_Category_FindOne_NotFound(t *testing.T) {
 func TestRealDB_Category_Update(t *testing.T) {
 	db := testutil.NewRealDB(t)
 	svc := NewService(db)
-	userId := uuid.New().String()
+	userId := seedUser(t, db)
 
 	created, err := svc.Create(CreateCategoryDto{
 		Name: "Old Name",
@@ -209,7 +225,7 @@ func TestRealDB_Category_Update(t *testing.T) {
 func TestRealDB_Category_Remove_Success(t *testing.T) {
 	db := testutil.NewRealDB(t)
 	svc := NewService(db)
-	userId := uuid.New().String()
+	userId := seedUser(t, db)
 
 	created, err := svc.Create(CreateCategoryDto{
 		Name: "To Delete",
@@ -233,8 +249,9 @@ func TestRealDB_Category_Remove_Success(t *testing.T) {
 }
 
 func TestRealDB_Category_Remove_HasChildren(t *testing.T) {
-	svc := NewService(testutil.NewRealDB(t))
-	userId := uuid.New().String()
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+	userId := seedUser(t, db)
 
 	parent, err := svc.Create(CreateCategoryDto{
 		Name: "Parent",
@@ -260,7 +277,7 @@ func TestRealDB_Category_Remove_HasChildren(t *testing.T) {
 func TestRealDB_Category_Remove_DefaultForbidden(t *testing.T) {
 	db := testutil.NewRealDB(t)
 	svc := NewService(db)
-	userId := uuid.New().String()
+	userId := seedUser(t, db)
 
 	err := svc.SeedDefaultCategories()
 	require.NoError(t, err)
