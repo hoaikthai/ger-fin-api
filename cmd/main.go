@@ -72,7 +72,7 @@ func main() {
 	categoryHandler    := category.NewHandler(categorySvc)
 	transactionHandler := transaction.NewHandler(transactionSvc)
 	recurringTxHandler := recurringTx.NewHandler(recurringTxSvc)
-	reportHandler      := report.NewHandler(reportSvc)
+	reportHandler      := report.NewHandler(reportSvc, userSvc)
 
 	// Auth middleware
 	jwtAuth := middleware.JWTAuth(cfg.JWT.Secret)

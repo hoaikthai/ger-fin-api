@@ -44,6 +44,11 @@ func (m *mockService) YearOverYear(userId string, from, to time.Time, years int)
 	return m.yearOverYearFn(userId, from, to, years)
 }
 
+// mockSettings returns the hardcoded defaults, satisfying SettingsProvider in tests.
+type mockSettings struct{}
+
+func (mockSettings) GetReportDefaults(_ string) (int, int, error) { return 3, 2, nil }
+
 // newTestRouter wires up the report handler against a fake auth middleware that
 // injects the given userId into the Gin context, bypassing real JWT verification.
 func newTestRouter(svc ServiceI, userId string) *gin.Engine {
@@ -53,7 +58,7 @@ func newTestRouter(svc ServiceI, userId string) *gin.Engine {
 		c.Set("user", &common.JWTClaims{Sub: userId})
 		c.Next()
 	}
-	h := NewHandler(svc)
+	h := NewHandler(svc, mockSettings{})
 	h.RegisterRoutes(r.Group(""), fakeAuth)
 	return r
 }

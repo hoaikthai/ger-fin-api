@@ -11,12 +11,18 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type Handler struct {
-	svc ServiceI
+// SettingsProvider supplies per-user defaults for report parameters.
+type SettingsProvider interface {
+	GetReportDefaults(userId string) (cashFlowMonths, yearOverYearYears int, err error)
 }
 
-func NewHandler(svc ServiceI) *Handler {
-	return &Handler{svc: svc}
+type Handler struct {
+	svc      ServiceI
+	settings SettingsProvider
+}
+
+func NewHandler(svc ServiceI, settings SettingsProvider) *Handler {
+	return &Handler{svc: svc, settings: settings}
 }
 
 func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, auth gin.HandlerFunc) {
@@ -184,10 +190,17 @@ func (h *Handler) cashFlow(c *gin.Context) {
 		return
 	}
 
-	months := 3
+	months := 0
 	if mStr := c.Query("months"); mStr != "" {
 		if m, err := strconv.Atoi(mStr); err == nil && m >= 1 && m <= 12 {
 			months = m
+		}
+	}
+	if months == 0 {
+		if cfMonths, _, err := h.settings.GetReportDefaults(claims.Sub); err == nil && cfMonths > 0 {
+			months = cfMonths
+		} else {
+			months = 3
 		}
 	}
 
@@ -220,10 +233,17 @@ func (h *Handler) yearOverYear(c *gin.Context) {
 		return
 	}
 
-	years := 2
+	years := 0
 	if yStr := c.Query("years"); yStr != "" {
 		if y, err := strconv.Atoi(yStr); err == nil && y >= 1 && y <= 5 {
 			years = y
+		}
+	}
+	if years == 0 {
+		if _, yoyYears, err := h.settings.GetReportDefaults(claims.Sub); err == nil && yoyYears > 0 {
+			years = yoyYears
+		} else {
+			years = 2
 		}
 	}
 

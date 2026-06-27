@@ -49,15 +49,15 @@
 
 ---
 
-## Phase 2.5 — User Preferences & Settings
+## Phase 2.5 — User Preferences & Settings ✅
 
 > Per-user configuration store. Unlocks persistent defaults for reporting (Phase 2), base currency (Phase 5), and notification thresholds (Phase 7).
 
-- [ ] **User settings model** — key-value or typed columns per user (`userId`, versioned)
-- [ ] **Settings CRUD** (`GET /users/settings`, `PATCH /users/settings`)
-- [ ] **Reporting defaults** — persist `cashFlowMonths` and `yearOverYearYears` preferences; used as fallback when query param is omitted
-- [ ] **Base currency preference** — placeholder field (`baseCurrency`), activated in Phase 5
-- [ ] **Default account** — optional preferred account for quick-add flows
+- [x] **User settings model** — typed columns per user (`userId`, auto-created on first access)
+- [x] **Settings CRUD** (`GET /users/settings`, `PATCH /users/settings`)
+- [x] **Reporting defaults** — `cashFlowMonths` and `yearOverYearYears` used as fallback when query param is omitted
+- [x] **Base currency preference** — placeholder field (`baseCurrency`, default `USD`), activated in Phase 5
+- [x] **Default account** — optional `defaultAccountId` field for quick-add flows
 
 ---
 
@@ -180,7 +180,7 @@
 |-------|--------|-------|
 | 1 — Core Foundation | ✅ Done | All CRUD, scheduler, tests |
 | 2 — Reporting & Analytics | ✅ Done | All 7 reports complete |
-| 2.5 — User Preferences & Settings | 🔲 Planned | Unlocks reporting defaults, currency, notifications |
+| 2.5 — User Preferences & Settings | ✅ Done | Settings CRUD, reporting defaults wired in |
 | 3 — Budget Planning | 🔲 Planned | New domain |
 | 4 — Financial Goals | 🔲 Planned | New domain |
 | 5 — Multi-Currency | 🔲 Planned | Needs external rate source |

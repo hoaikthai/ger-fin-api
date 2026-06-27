@@ -21,6 +21,8 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, auth gin.HandlerFunc) {
 	g := rg.Group("/users", auth)
 	g.GET("/me", h.getProfile)
 	g.PUT("/me", h.updateProfile)
+	g.GET("/settings", h.getSettings)
+	g.PATCH("/settings", h.updateSettings)
 }
 
 // @Summary		Get current user profile
@@ -47,6 +49,54 @@ func (h *Handler) getProfile(c *gin.Context) {
 	}
 
 	c.JSON(200, u)
+}
+
+// @Summary		Get user settings
+// @Description	Returns the authenticated user's preferences; auto-creates with defaults on first access
+// @Tags		users
+// @Produce		json
+// @Success		200 {object} UserSettings
+// @Failure		401 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/users/settings [get]
+func (h *Handler) getSettings(c *gin.Context) {
+	claims := middleware.CurrentUser(c)
+
+	settings, err := h.svc.GetSettings(claims.Sub)
+	if err != nil {
+		common.RespondInternalError(c)
+		return
+	}
+
+	c.JSON(200, settings)
+}
+
+// @Summary		Update user settings
+// @Description	Partially update the authenticated user's preferences
+// @Tags		users
+// @Accept		json
+// @Produce		json
+// @Param		body body UpdateSettingsDto true "Settings fields to update"
+// @Success		200 {object} UserSettings
+// @Failure		400 {object} common.ErrorResponse
+// @Failure		401 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/users/settings [patch]
+func (h *Handler) updateSettings(c *gin.Context) {
+	claims := middleware.CurrentUser(c)
+
+	var dto UpdateSettingsDto
+	if !common.BindJSON(c, &dto) {
+		return
+	}
+
+	settings, err := h.svc.UpdateSettings(claims.Sub, dto)
+	if err != nil {
+		common.RespondInternalError(c)
+		return
+	}
+
+	c.JSON(200, settings)
 }
 
 // @Summary		Update current user profile

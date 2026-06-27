@@ -73,3 +73,58 @@ func (s *Service) GetProfile(id string) (*User, error) {
 	}
 	return u, nil
 }
+
+// GetSettings returns the user's settings, auto-creating defaults on first access.
+func (s *Service) GetSettings(userId string) (*UserSettings, error) {
+	var settings UserSettings
+	err := s.db.Where("\"userId\" = ?", userId).First(&settings).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		settings = UserSettings{UserId: userId}
+		if err := s.db.Create(&settings).Error; err != nil {
+			return nil, err
+		}
+		return &settings, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &settings, nil
+}
+
+func (s *Service) UpdateSettings(userId string, dto UpdateSettingsDto) (*UserSettings, error) {
+	settings, err := s.GetSettings(userId)
+	if err != nil {
+		return nil, err
+	}
+
+	if dto.CashFlowMonths != nil {
+		settings.CashFlowMonths = *dto.CashFlowMonths
+	}
+	if dto.YearOverYearYears != nil {
+		settings.YearOverYearYears = *dto.YearOverYearYears
+	}
+	if dto.BaseCurrency != nil {
+		settings.BaseCurrency = *dto.BaseCurrency
+	}
+	if dto.DefaultAccountId != nil {
+		if *dto.DefaultAccountId == "" {
+			settings.DefaultAccountId = nil
+		} else {
+			settings.DefaultAccountId = dto.DefaultAccountId
+		}
+	}
+
+	if err := s.db.Save(settings).Error; err != nil {
+		return nil, err
+	}
+	return settings, nil
+}
+
+// GetReportDefaults satisfies report.SettingsProvider. Falls back to hardcoded defaults on error.
+func (s *Service) GetReportDefaults(userId string) (cashFlowMonths, yearOverYearYears int, err error) {
+	settings, err := s.GetSettings(userId)
+	if err != nil {
+		return 3, 2, nil
+	}
+	return settings.CashFlowMonths, settings.YearOverYearYears, nil
+}
