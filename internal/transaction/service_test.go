@@ -2,6 +2,7 @@ package transaction
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -443,14 +444,243 @@ func TestRealDB_Transaction_ImportFromCsv(t *testing.T) {
 
 	csvData := []byte("Date,Category,Amount,Currency,Wallet,Note\n2024-01-15,Food & Beverage,-15.50,USD,Wallet,Lunch\n")
 
-	importResult, err := svc.ImportFromCsv(csvData, userId)
+	importResult, err := svc.ImportFromCsv(csvData, userId, nil)
 	require.NoError(t, err)
 	require.NotNil(t, importResult)
 	assert.Equal(t, 1, importResult.Imported)
+	assert.Equal(t, 0, importResult.Skipped)
 	assert.Empty(t, importResult.Errors)
+	assert.Empty(t, importResult.UnknownCategories)
 
 	var txs []Transaction
 	err = db.Where("\"userId\" = ?", userId).Find(&txs).Error
 	require.NoError(t, err)
 	assert.Len(t, txs, 1)
+}
+
+func TestRealDB_Transaction_ImportFromCsv_UnknownCategory_NoMapping(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	userId := seedUser(t, db)
+	svc2 := account.NewService(db)
+	_, err := svc2.Create(userId, account.CreateAccountDto{Name: "Wallet", Currency: "USD", Balance: 500})
+	require.NoError(t, err)
+
+	csvData := []byte("Date,Category,Amount,Currency,Wallet\n2024-01-15,Unknown Cat,-10.00,USD,Wallet\n")
+
+	result, err := svc.ImportFromCsv(csvData, userId, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 0, result.Imported)
+	assert.Equal(t, []string{"Unknown Cat"}, result.UnknownCategories)
+
+	var txs []Transaction
+	db.Where("\"userId\" = ?", userId).Find(&txs)
+	assert.Empty(t, txs)
+}
+
+func TestRealDB_Transaction_ImportFromCsv_UnknownCategory_WithMapping(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	userId := seedUser(t, db)
+	svc2 := account.NewService(db)
+	_, err := svc2.Create(userId, account.CreateAccountDto{Name: "Wallet", Currency: "USD", Balance: 500})
+	require.NoError(t, err)
+
+	cat := seedCategory(t, db, userId, common.TransactionTypeExpense)
+
+	csvData := []byte("Date,Category,Amount,Currency,Wallet\n2024-01-15,My Old Category,-20.00,USD,Wallet\n")
+	mapping := map[string]string{"My Old Category": cat.ID}
+
+	result, err := svc.ImportFromCsv(csvData, userId, mapping)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 1, result.Imported)
+	assert.Empty(t, result.UnknownCategories)
+
+	var txs []Transaction
+	db.Where("\"userId\" = ?", userId).Find(&txs)
+	assert.Len(t, txs, 1)
+	assert.Equal(t, cat.ID, txs[0].CategoryId)
+}
+
+func TestRealDB_Transaction_ImportFromCsv_Duplicate_SkipsAll(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	seedDefaultCategories(t, db)
+
+	userId := seedUser(t, db)
+	svc2 := account.NewService(db)
+	_, err := svc2.Create(userId, account.CreateAccountDto{Name: "Wallet", Currency: "USD", Balance: 500})
+	require.NoError(t, err)
+
+	csvData := []byte("Date,Category,Amount,Currency,Wallet,Note\n2024-03-10,Food & Beverage,-15.00,USD,Wallet,Lunch\n")
+
+	// First import
+	r1, err := svc.ImportFromCsv(csvData, userId, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, r1.Imported)
+	assert.Equal(t, 0, r1.Skipped)
+
+	// Re-import identical CSV — should skip the duplicate
+	r2, err := svc.ImportFromCsv(csvData, userId, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, r2.Imported)
+	assert.Equal(t, 1, r2.Skipped)
+
+	var txs []Transaction
+	db.Where("\"userId\" = ?", userId).Find(&txs)
+	assert.Len(t, txs, 1)
+}
+
+func TestRealDB_Transaction_ImportFromCsv_Duplicate_TwoIdenticalRows(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	seedDefaultCategories(t, db)
+
+	userId := seedUser(t, db)
+	svc2 := account.NewService(db)
+	_, err := svc2.Create(userId, account.CreateAccountDto{Name: "Wallet", Currency: "USD", Balance: 500})
+	require.NoError(t, err)
+
+	// CSV has two identical rows — both are genuinely distinct transactions.
+	csvTwoRows := []byte("Date,Category,Amount,Currency,Wallet,Note\n2024-03-10,Food & Beverage,-25.00,USD,Wallet,Coffee\n2024-03-10,Food & Beverage,-25.00,USD,Wallet,Coffee\n")
+
+	r1, err := svc.ImportFromCsv(csvTwoRows, userId, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, r1.Imported)
+	assert.Equal(t, 0, r1.Skipped)
+
+	// Re-import: DB now has 2; CSV has 2 → all duplicates, skip both.
+	r2, err := svc.ImportFromCsv(csvTwoRows, userId, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 0, r2.Imported)
+	assert.Equal(t, 2, r2.Skipped)
+
+	var txs []Transaction
+	db.Where("\"userId\" = ?", userId).Find(&txs)
+	assert.Len(t, txs, 2)
+}
+
+func TestRealDB_Transaction_ValidateCsv_AllGood(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	seedDefaultCategories(t, db)
+
+	userId := seedUser(t, db)
+	account.NewService(db).Create(userId, account.CreateAccountDto{Name: "Wallet", Currency: "USD", Balance: 500})
+
+	csvData := []byte("Date,Category,Amount,Currency,Wallet\n2024-05-01,Food & Beverage,-10.00,USD,Wallet\n")
+	result, err := svc.ValidateCsv(csvData, userId, nil)
+	require.NoError(t, err)
+	assert.True(t, result.Valid)
+	assert.Empty(t, result.UnknownAccounts)
+	assert.Empty(t, result.UnknownCategories)
+	assert.Empty(t, result.RowErrors)
+}
+
+func TestRealDB_Transaction_ValidateCsv_CollectsAllIssues(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	userId := seedUser(t, db)
+	// No accounts, no categories seeded — every name in the CSV will be unknown.
+
+	csvData := []byte("Date,Category,Amount,Currency,Wallet\n2024-05-01,Groceries,-10.00,USD,Cash\n")
+	result, err := svc.ValidateCsv(csvData, userId, nil)
+	require.NoError(t, err)
+	assert.False(t, result.Valid)
+	assert.Equal(t, []string{"Cash"}, result.UnknownAccounts)
+	assert.Equal(t, []string{"Groceries"}, result.UnknownCategories)
+	// Row errors are skipped when account/category are unknown.
+	assert.Empty(t, result.RowErrors)
+}
+
+func TestRealDB_Transaction_ValidateCsv_RowErrors(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	seedDefaultCategories(t, db)
+
+	userId := seedUser(t, db)
+	account.NewService(db).Create(userId, account.CreateAccountDto{Name: "Wallet", Currency: "USD", Balance: 500})
+
+	// Income category but negative amount → row error.
+	csvData := []byte("Date,Category,Amount,Currency,Wallet\n2024-05-01,Salary,-50.00,USD,Wallet\n")
+	result, err := svc.ValidateCsv(csvData, userId, nil)
+	require.NoError(t, err)
+	assert.False(t, result.Valid)
+	assert.Empty(t, result.UnknownAccounts)
+	assert.Empty(t, result.UnknownCategories)
+	assert.Len(t, result.RowErrors, 1)
+}
+
+func TestRealDB_Transaction_ValidateCsv_RowErrorCap(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	seedDefaultCategories(t, db)
+
+	userId := seedUser(t, db)
+	account.NewService(db).Create(userId, account.CreateAccountDto{Name: "Wallet", Currency: "USD", Balance: 500})
+
+	// Build a CSV with maxValidateRowErrors+10 bad rows (income category with negative amount).
+	var sb strings.Builder
+	sb.WriteString("Date,Category,Amount,Currency,Wallet\n")
+	for i := 0; i < maxValidateRowErrors+10; i++ {
+		sb.WriteString("2024-05-01,Salary,-50.00,USD,Wallet\n")
+	}
+	result, err := svc.ValidateCsv([]byte(sb.String()), userId, nil)
+	require.NoError(t, err)
+	assert.False(t, result.Valid)
+	assert.Len(t, result.RowErrors, maxValidateRowErrors)
+}
+
+func TestRealDB_Transaction_ValidateCsv_WithMapping(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	userId := seedUser(t, db)
+	account.NewService(db).Create(userId, account.CreateAccountDto{Name: "Wallet", Currency: "USD", Balance: 500})
+	cat := seedCategory(t, db, userId, common.TransactionTypeExpense)
+
+	csvData := []byte("Date,Category,Amount,Currency,Wallet\n2024-05-01,Old Name,-20.00,USD,Wallet\n")
+	result, err := svc.ValidateCsv(csvData, userId, map[string]string{"Old Name": cat.ID})
+	require.NoError(t, err)
+	assert.True(t, result.Valid)
+	assert.Empty(t, result.UnknownCategories)
+}
+
+func TestRealDB_Transaction_ImportFromCsv_Duplicate_PartialOverlap(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	seedDefaultCategories(t, db)
+
+	userId := seedUser(t, db)
+	svc2 := account.NewService(db)
+	_, err := svc2.Create(userId, account.CreateAccountDto{Name: "Wallet", Currency: "USD", Balance: 500})
+	require.NoError(t, err)
+
+	// First import: 1 transaction.
+	csvOne := []byte("Date,Category,Amount,Currency,Wallet\n2024-04-05,Food & Beverage,-30.00,USD,Wallet\n")
+	r1, err := svc.ImportFromCsv(csvOne, userId, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, r1.Imported)
+
+	// Second import: 2 rows with same key — DB has 1, so only 1 more should be imported.
+	csvTwo := []byte("Date,Category,Amount,Currency,Wallet\n2024-04-05,Food & Beverage,-30.00,USD,Wallet\n2024-04-05,Food & Beverage,-30.00,USD,Wallet\n")
+	r2, err := svc.ImportFromCsv(csvTwo, userId, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, r2.Imported)
+	assert.Equal(t, 1, r2.Skipped)
+
+	var txs []Transaction
+	db.Where("\"userId\" = ?", userId).Find(&txs)
+	assert.Len(t, txs, 2)
 }

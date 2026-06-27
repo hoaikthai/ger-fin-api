@@ -5,7 +5,9 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"io"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -310,23 +312,80 @@ func (s *Service) Transfer(dto CreateTransferDto, userId string) (*TransferResul
 	return result, nil
 }
 
-func (s *Service) ImportFromCsv(csvData []byte, userId string) (*ImportResult, error) {
-	reader := csv.NewReader(bytes.NewReader(csvData))
-	records, err := reader.ReadAll()
+// maxValidateRowErrors caps the number of row-level errors returned by ValidateCsv.
+// Unknown account/category scanning always runs to completion regardless of this limit.
+const maxValidateRowErrors = 50
+
+// csvContext holds the in-memory state used by ImportFromCsv (which needs the full
+// dataset for duplicate frequency counting and the DB transaction).
+type csvContext struct {
+	colIdx    map[string]int
+	rows      [][]string
+	accByName map[string]*account.Account
+	catByName map[string]*category.Category
+}
+
+// loadUserEntities fetches the user's accounts and categories from the DB and applies
+// categoryMapping so that CSV category names resolve to existing category records.
+func (s *Service) loadUserEntities(userId string, categoryMapping map[string]string) (map[string]*account.Account, map[string]*category.Category, error) {
+	var userAccounts []account.Account
+	if err := s.db.Where(`"userId" = ?`, userId).Find(&userAccounts).Error; err != nil {
+		return nil, nil, err
+	}
+	var userCategories []category.Category
+	if err := s.db.Where(`"userId" = ? OR "isDefault" = ?`, userId, true).Find(&userCategories).Error; err != nil {
+		return nil, nil, err
+	}
+
+	accByName := make(map[string]*account.Account, len(userAccounts))
+	for i := range userAccounts {
+		accByName[userAccounts[i].Name] = &userAccounts[i]
+	}
+	catByName := make(map[string]*category.Category, len(userCategories))
+	catById := make(map[string]*category.Category, len(userCategories))
+	for i := range userCategories {
+		catByName[userCategories[i].Name] = &userCategories[i]
+		catById[userCategories[i].ID] = &userCategories[i]
+	}
+
+	if len(categoryMapping) > 0 {
+		var idsToLoad []string
+		for _, catId := range categoryMapping {
+			if _, ok := catById[catId]; !ok {
+				idsToLoad = append(idsToLoad, catId)
+			}
+		}
+		if len(idsToLoad) > 0 {
+			var extra []category.Category
+			if err := s.db.Where("id IN ?", idsToLoad).Find(&extra).Error; err != nil {
+				return nil, nil, err
+			}
+			for i := range extra {
+				catById[extra[i].ID] = &extra[i]
+			}
+		}
+		for csvName, catId := range categoryMapping {
+			if _, ok := catByName[csvName]; !ok {
+				if cat, ok := catById[catId]; ok {
+					catByName[csvName] = cat
+				}
+			}
+		}
+	}
+
+	return accByName, catByName, nil
+}
+
+// parseCsvHeaders parses the first line of a CSV reader and returns the column index map.
+func parseCsvHeaders(reader *csv.Reader) (map[string]int, error) {
+	header, err := reader.Read()
 	if err != nil {
 		return nil, common.NewBadRequest(fmt.Sprintf("CSV parsing error: %s", err.Error()))
 	}
-
-	if len(records) < 2 {
-		return nil, common.NewBadRequest("CSV file is empty")
-	}
-
-	// Build column index map from header row
-	colIdx := make(map[string]int, len(records[0]))
-	for i, h := range records[0] {
+	colIdx := make(map[string]int, len(header))
+	for i, h := range header {
 		colIdx[strings.TrimSpace(h)] = i
 	}
-
 	required := []string{"Date", "Category", "Amount", "Currency", "Wallet"}
 	var missing []string
 	for _, col := range required {
@@ -337,75 +396,124 @@ func (s *Service) ImportFromCsv(csvData []byte, userId string) (*ImportResult, e
 	if len(missing) > 0 {
 		return nil, common.NewBadRequest(fmt.Sprintf("Missing required columns: %s", strings.Join(missing, ", ")))
 	}
+	return colIdx, nil
+}
 
-	rows := records[1:]
-
-	// Load user accounts and categories once
-	var userAccounts []account.Account
-	if err := s.db.Where("\"userId\" = ?", userId).Find(&userAccounts).Error; err != nil {
+// parseCsvContext loads all rows into memory (needed by ImportFromCsv for duplicate
+// detection) and resolves user entities via loadUserEntities.
+func (s *Service) parseCsvContext(csvData []byte, userId string, categoryMapping map[string]string) (*csvContext, error) {
+	reader := csv.NewReader(bytes.NewReader(csvData))
+	colIdx, err := parseCsvHeaders(reader)
+	if err != nil {
 		return nil, err
 	}
 
-	var userCategories []category.Category
-	if err := s.db.Where("\"userId\" = ? OR \"isDefault\" = ?", userId, true).Find(&userCategories).Error; err != nil {
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, common.NewBadRequest(fmt.Sprintf("CSV parsing error: %s", err.Error()))
+	}
+	if len(records) == 0 {
+		return nil, common.NewBadRequest("CSV file is empty")
+	}
+
+	accByName, catByName, err := s.loadUserEntities(userId, categoryMapping)
+	if err != nil {
 		return nil, err
 	}
 
-	accByName := make(map[string]*account.Account, len(userAccounts))
-	for i := range userAccounts {
-		accByName[userAccounts[i].Name] = &userAccounts[i]
-	}
-	catByName := make(map[string]*category.Category, len(userCategories))
-	for i := range userCategories {
-		catByName[userCategories[i].Name] = &userCategories[i]
-	}
+	return &csvContext{colIdx: colIdx, rows: records, accByName: accByName, catByName: catByName}, nil
+}
 
-	// Pre-validate: all wallets and categories in the file must exist
-	walletNames := make(map[string]struct{})
-	catNames := make(map[string]struct{})
-	for _, r := range rows {
-		walletNames[r[colIdx["Wallet"]]] = struct{}{}
-		catNames[r[colIdx["Category"]]] = struct{}{}
-	}
-
-	var preErrors []string
-	for w := range walletNames {
-		if _, ok := accByName[w]; !ok {
-			preErrors = append(preErrors, fmt.Sprintf(`account "%s" not found`, w))
+// validateRows checks amount, currency, and income/expense sign for rows in ctx.
+// Rows referencing unknown accounts or categories are skipped.
+func validateRows(ctx *csvContext) []string {
+	var errs []string
+	for i, r := range ctx.rows {
+		rowNum := i + 2
+		acc, accKnown := ctx.accByName[r[ctx.colIdx["Wallet"]]]
+		cat, catKnown := ctx.catByName[r[ctx.colIdx["Category"]]]
+		if !accKnown || !catKnown {
+			continue
 		}
-	}
-	for cat := range catNames {
-		if _, ok := catByName[cat]; !ok {
-			preErrors = append(preErrors, fmt.Sprintf(`category "%s" not found`, cat))
-		}
-	}
-	if len(preErrors) > 0 {
-		return nil, common.NewBadRequest(strings.Join(preErrors, ". ") + " Please create these first.")
-	}
-
-	// First pass: validate every row
-	var rowErrors []string
-	for i, r := range rows {
-		rowNum := i + 2 // 1-based, +1 for header
-		wallet := r[colIdx["Wallet"]]
-		catName := r[colIdx["Category"]]
-		currency := r[colIdx["Currency"]]
-		amountStr := r[colIdx["Amount"]]
-
-		acc := accByName[wallet]
-		cat := catByName[catName]
-
-		amount, err := parseAmount(amountStr)
+		amount, err := parseAmount(r[ctx.colIdx["Amount"]])
 		if err != nil {
-			rowErrors = append(rowErrors, fmt.Sprintf("Row %d: invalid amount %q", rowNum, amountStr))
+			errs = append(errs, fmt.Sprintf("Row %d: invalid amount %q", rowNum, r[ctx.colIdx["Amount"]]))
+			continue
+		}
+		if acc.Currency != r[ctx.colIdx["Currency"]] {
+			errs = append(errs, fmt.Sprintf("Row %d: currency mismatch — account uses %s, transaction uses %s", rowNum, acc.Currency, r[ctx.colIdx["Currency"]]))
+			continue
+		}
+		if cat.Type == string(common.TransactionTypeIncome) && amount < 0 {
+			errs = append(errs, fmt.Sprintf("Row %d: amount should be positive for income transactions", rowNum))
+			continue
+		}
+		if cat.Type == string(common.TransactionTypeExpense) && amount > 0 {
+			errs = append(errs, fmt.Sprintf("Row %d: amount should be negative for expense transactions", rowNum))
+			continue
+		}
+	}
+	return errs
+}
+
+// ValidateCsv streams the CSV row-by-row so peak memory is O(1) per row regardless
+// of file size. A single pass collects unknown accounts, unknown categories, and
+// row-level errors simultaneously. Row errors are capped at maxValidateRowErrors to
+// bound response size; unknown name scanning always runs to completion.
+func (s *Service) ValidateCsv(csvData []byte, userId string, categoryMapping map[string]string) (*ValidateResult, error) {
+	accByName, catByName, err := s.loadUserEntities(userId, categoryMapping)
+	if err != nil {
+		return nil, err
+	}
+
+	reader := csv.NewReader(bytes.NewReader(csvData))
+	reader.ReuseRecord = true // reuse the row slice to avoid per-row allocations
+	colIdx, err := parseCsvHeaders(reader)
+	if err != nil {
+		return nil, err
+	}
+
+	unknownAccSet := make(map[string]struct{})
+	unknownCatSet := make(map[string]struct{})
+	var rowErrors []string
+	rowNum := 1
+
+	for {
+		r, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, common.NewBadRequest(fmt.Sprintf("CSV parsing error at row %d: %s", rowNum+1, err.Error()))
+		}
+		rowNum++
+
+		walletName := r[colIdx["Wallet"]]
+		catName := r[colIdx["Category"]]
+		acc, accKnown := accByName[walletName]
+		cat, catKnown := catByName[catName]
+
+		if !accKnown {
+			unknownAccSet[walletName] = struct{}{}
+		}
+		if !catKnown {
+			unknownCatSet[catName] = struct{}{}
+		}
+
+		// Skip row validation if entities are missing or the error cap is reached.
+		if !accKnown || !catKnown || len(rowErrors) >= maxValidateRowErrors {
 			continue
 		}
 
-		if acc.Currency != currency {
-			rowErrors = append(rowErrors, fmt.Sprintf("Row %d: currency mismatch — account uses %s, transaction uses %s", rowNum, acc.Currency, currency))
+		amount, err := parseAmount(r[colIdx["Amount"]])
+		if err != nil {
+			rowErrors = append(rowErrors, fmt.Sprintf("Row %d: invalid amount %q", rowNum, r[colIdx["Amount"]]))
 			continue
 		}
-
+		if acc.Currency != r[colIdx["Currency"]] {
+			rowErrors = append(rowErrors, fmt.Sprintf("Row %d: currency mismatch — account uses %s, transaction uses %s", rowNum, acc.Currency, r[colIdx["Currency"]]))
+			continue
+		}
 		if cat.Type == string(common.TransactionTypeIncome) && amount < 0 {
 			rowErrors = append(rowErrors, fmt.Sprintf("Row %d: amount should be positive for income transactions", rowNum))
 			continue
@@ -416,49 +524,163 @@ func (s *Service) ImportFromCsv(csvData []byte, userId string) (*ImportResult, e
 		}
 	}
 
-	if len(rowErrors) > 0 {
-		return &ImportResult{Imported: 0, Errors: rowErrors}, nil
+	return &ValidateResult{
+		Valid:              len(unknownAccSet) == 0 && len(unknownCatSet) == 0 && len(rowErrors) == 0,
+		UnknownAccounts:   sortedKeys(unknownAccSet),
+		UnknownCategories: sortedKeys(unknownCatSet),
+		RowErrors:         rowErrors,
+	}, nil
+}
+
+func sortedKeys(m map[string]struct{}) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func (s *Service) ImportFromCsv(csvData []byte, userId string, categoryMapping map[string]string) (*ImportResult, error) {
+	ctx, err := s.parseCsvContext(csvData, userId, categoryMapping)
+	if err != nil {
+		return nil, err
 	}
 
-	// Second pass: import all rows inside a single transaction so a failure rolls back all inserts.
-	var imported int
+	// Collect unique names used in the CSV.
+	walletNames := make(map[string]struct{})
+	catNames := make(map[string]struct{})
+	for _, r := range ctx.rows {
+		walletNames[r[ctx.colIdx["Wallet"]]] = struct{}{}
+		catNames[r[ctx.colIdx["Category"]]] = struct{}{}
+	}
+
+	// Unknown accounts → hard error; unknown categories → return for FE to map.
+	var accErrors []string
+	for w := range walletNames {
+		if _, ok := ctx.accByName[w]; !ok {
+			accErrors = append(accErrors, fmt.Sprintf(`account "%s" not found`, w))
+		}
+	}
+	if len(accErrors) > 0 {
+		sort.Strings(accErrors)
+		return nil, common.NewBadRequest(strings.Join(accErrors, ". ") + " Please create these first.")
+	}
+
+	var unknownCategories []string
+	for c := range catNames {
+		if _, ok := ctx.catByName[c]; !ok {
+			unknownCategories = append(unknownCategories, c)
+		}
+	}
+	if len(unknownCategories) > 0 {
+		sort.Strings(unknownCategories)
+		return &ImportResult{UnknownCategories: unknownCategories}, nil
+	}
+
+	rowErrors := validateRows(ctx)
+	if len(rowErrors) > 0 {
+		return &ImportResult{Errors: rowErrors}, nil
+	}
+
+	// Build parsed rows and CSV-frequency map for duplicate detection.
+	type dupKey struct {
+		date        string
+		accountId   string
+		categoryId  string
+		amountCents int64
+	}
+	toDupKey := func(date time.Time, accountId, categoryId string, amount float64) dupKey {
+		return dupKey{
+			date:        date.UTC().Format("2006-01-02"),
+			accountId:   accountId,
+			categoryId:  categoryId,
+			amountCents: int64(math.Round(amount * 100)),
+		}
+	}
+
+	type parsedRow struct {
+		acc    *account.Account
+		cat    *category.Category
+		amount float64
+		date   time.Time
+		note   string
+		key    dupKey
+	}
+
+	parsed := make([]parsedRow, 0, len(ctx.rows))
+	csvFreq := make(map[dupKey]int)
+	var minDate, maxDate time.Time
+
+	for _, r := range ctx.rows {
+		acc := ctx.accByName[r[ctx.colIdx["Wallet"]]]
+		cat := ctx.catByName[r[ctx.colIdx["Category"]]]
+		amount, _ := parseAmount(r[ctx.colIdx["Amount"]])
+		date := parseTxDate(r[ctx.colIdx["Date"]])
+
+		note := ""
+		if idx, ok := ctx.colIdx["Note"]; ok && idx < len(r) {
+			note = r[idx]
+		}
+		if note == "" {
+			note = "Imported transaction"
+		}
+
+		k := toDupKey(date, acc.ID, cat.ID, amount)
+		csvFreq[k]++
+		if minDate.IsZero() || date.Before(minDate) {
+			minDate = date
+		}
+		if date.After(maxDate) {
+			maxDate = date
+		}
+		parsed = append(parsed, parsedRow{acc: acc, cat: cat, amount: amount, date: date, note: note, key: k})
+	}
+
+	// Query existing transactions in date range for duplicate detection.
+	// quota = csvCount[key] - dbCount[key] so two genuinely identical transactions
+	// on the same day are each imported exactly once.
+	dbFreq := make(map[dupKey]int)
+	if !minDate.IsZero() {
+		var existing []Transaction
+		endDate := maxDate.AddDate(0, 0, 1)
+		if err := s.db.
+			Where(`"userId" = ? AND "transactionDate" >= ? AND "transactionDate" < ?`, userId, minDate, endDate).
+			Select(`"accountId", "categoryId", amount, "transactionDate"`).
+			Find(&existing).Error; err != nil {
+			return nil, err
+		}
+		for _, tx := range existing {
+			k := toDupKey(tx.TransactionDate, tx.AccountId, tx.CategoryId, tx.Amount)
+			dbFreq[k]++
+		}
+	}
+
+	var imported, skipped int
+	importedPerKey := make(map[dupKey]int)
 	if err := s.db.Transaction(func(tx *gorm.DB) error {
 		txSvc := &Service{db: tx}
-		for _, r := range rows {
-			wallet := r[colIdx["Wallet"]]
-			catName := r[colIdx["Category"]]
-			dateStr := r[colIdx["Date"]]
-			amountStr := r[colIdx["Amount"]]
-
-			acc := accByName[wallet]
-			cat := catByName[catName]
-
-			amount, _ := parseAmount(amountStr)
-			txDate, _ := time.Parse("2006-01-02", dateStr)
-			if txDate.IsZero() {
-				txDate, _ = time.Parse(time.RFC3339, dateStr)
+		for _, p := range parsed {
+			quota := csvFreq[p.key] - dbFreq[p.key]
+			if importedPerKey[p.key] >= quota {
+				skipped++
+				continue
 			}
-
-			note := ""
-			if idx, ok := colIdx["Note"]; ok && idx < len(r) {
-				note = r[idx]
-			}
-			if note == "" {
-				note = "Imported transaction"
-			}
-
 			dto := CreateTransactionDto{
-				Type:            common.TransactionType(cat.Type),
-				Amount:          amount,
-				Description:     note,
-				CategoryId:      cat.ID,
-				AccountId:       acc.ID,
-				TransactionDate: &txDate,
+				Type:            common.TransactionType(p.cat.Type),
+				Amount:          p.amount,
+				Description:     p.note,
+				CategoryId:      p.cat.ID,
+				AccountId:       p.acc.ID,
+				TransactionDate: &p.date,
 			}
-
 			if _, err := txSvc.Create(dto, userId); err != nil {
 				return err
 			}
+			importedPerKey[p.key]++
 			imported++
 		}
 		return nil
@@ -466,7 +688,15 @@ func (s *Service) ImportFromCsv(csvData []byte, userId string) (*ImportResult, e
 		return nil, err
 	}
 
-	return &ImportResult{Imported: imported, Errors: []string{}}, nil
+	return &ImportResult{Imported: imported, Skipped: skipped}, nil
+}
+
+func parseTxDate(s string) time.Time {
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return t
+	}
+	t, _ := time.Parse(time.RFC3339, s)
+	return t
 }
 
 func parseAmount(s string) (float64, error) {

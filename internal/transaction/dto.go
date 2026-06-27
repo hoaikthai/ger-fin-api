@@ -38,8 +38,27 @@ type TimeRangeQuery struct {
 }
 
 type ImportResult struct {
-	Imported int      `json:"imported"`
-	Errors   []string `json:"errors"`
+	Imported          int      `json:"imported"`
+	Skipped           int      `json:"skipped"`
+	Errors            []string `json:"errors"`
+	UnknownCategories []string `json:"unknownCategories,omitempty"`
+}
+
+type ValidateResult struct {
+	Valid              bool     `json:"valid"`
+	UnknownAccounts   []string `json:"unknownAccounts,omitempty"`
+	UnknownCategories []string `json:"unknownCategories,omitempty"`
+	RowErrors         []string `json:"rowErrors,omitempty"`
+}
+
+type ImportJobResponse struct {
+	JobId string `json:"jobId"`
+}
+
+type ImportJobStatus struct {
+	Status string        `json:"status"` // pending | running | done | failed
+	Result *ImportResult `json:"result,omitempty"`
+	Error  string        `json:"error,omitempty"`
 }
 
 type TransferResult struct {

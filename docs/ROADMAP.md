@@ -102,11 +102,12 @@
 > Move data in and out of the system.
 
 - [x] CSV export (transactions)
-- [ ] **CSV import** — parse and bulk-insert transactions from uploaded file
+- [x] **CSV import** — bulk-insert from uploaded file; async background job (202 + jobId), poll via `GET /transactions/import/jobs/:jobId`
+- [x] **Import validation endpoint** — `POST /transactions/import/validate`; streams CSV O(1) memory, single pass, returns unknown accounts, unknown categories, and row errors (capped at 50) without importing
+- [x] **Unknown category mapping** — FE receives `unknownCategories` list and re-submits with `categoryMapping` (CSV name → category ID)
+- [x] **Duplicate detection** — skips rows already present by (date, account, category, amount); frequency-aware so two identical same-day transactions are each imported once
 - [ ] **Excel export** — `.xlsx` format with multiple sheets (transactions, summary, category breakdown)
 - [ ] **Excel import** — parse `.xlsx` uploads
-- [ ] **Import preview** — dry-run endpoint that returns parsed rows without committing
-- [ ] **Import error report** — per-row validation errors returned in response
 
 ---
 
@@ -184,7 +185,7 @@
 | 3 — Budget Planning | 🔲 Planned | New domain |
 | 4 — Financial Goals | 🔲 Planned | New domain |
 | 5 — Multi-Currency | 🔲 Planned | Needs external rate source |
-| 6 — Import / Export | 🟡 Partial | CSV export done; import pending |
+| 6 — Import / Export | 🟡 Partial | CSV export + import done; Excel pending |
 | 7 — Notifications | 🔲 Planned | New domain |
 | 8 — Tags | 🔲 Planned | New domain |
 | 9 — Security & Hardening | 🔲 Planned | Refresh tokens are highest priority |

@@ -1,19 +1,30 @@
 package transaction
 
 import (
+	"encoding/json"
 	"io"
 	"strconv"
+	"sync"
 
 	"ger_fin_api/internal/common"
 	"ger_fin_api/internal/middleware"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 const maxCSVBytes = 10 * 1024 * 1024 // 10 MB
 
+type importJobState struct {
+	mu     sync.Mutex
+	status string // pending | running | done | failed
+	result *ImportResult
+	errMsg string
+}
+
 type Handler struct {
-	svc *Service
+	svc  *Service
+	jobs sync.Map // string → *importJobState
 }
 
 func NewHandler(svc *Service) *Handler {
@@ -28,7 +39,9 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, auth gin.HandlerFunc) {
 	g.GET("/:id", h.findOne)
 	g.PATCH("/:id", h.update)
 	g.DELETE("/:id", h.remove)
+	g.POST("/import/validate", h.validateImportCsv)
 	g.POST("/import", h.importCsv)
+	g.GET("/import/jobs/:jobId", h.getImportJob)
 
 	// /transfers
 	t := rg.Group("/transfers", auth)
@@ -211,13 +224,42 @@ func (h *Handler) createTransfer(c *gin.Context) {
 	c.JSON(201, result)
 }
 
-// @Summary		Import transactions from CSV
-// @Description	Bulk-import transactions from a CSV file. Required columns: Date, Category, Amount, Currency, Wallet. Optional: Note.
+// @Summary		Validate CSV before import
+// @Description	Parse a CSV file and return all issues (unknown accounts, unknown categories, row errors) without importing anything. Optionally supply categoryMapping to pre-resolve unknown categories.
 // @Tags		transactions
 // @Accept		multipart/form-data
 // @Produce		json
-// @Param		file formData file true "CSV file"
-// @Success		201 {object} ImportResult
+// @Param		file            formData file   true  "CSV file"
+// @Param		categoryMapping formData string false "JSON map of CSV category name to existing category ID"
+// @Success		200 {object} ValidateResult
+// @Failure		400 {object} common.ErrorResponse
+// @Failure		401 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/transactions/import/validate [post]
+func (h *Handler) validateImportCsv(c *gin.Context) {
+	claims := middleware.CurrentUser(c)
+
+	buf, categoryMapping, ok := readCsvForm(c)
+	if !ok {
+		return
+	}
+
+	result, err := h.svc.ValidateCsv(buf, claims.Sub, categoryMapping)
+	if err != nil {
+		common.RespondAppError(c, err)
+		return
+	}
+	c.JSON(200, result)
+}
+
+// @Summary		Import transactions from CSV (async)
+// @Description	Start a background import job from a CSV file. Poll GET /transactions/import/jobs/{jobId} for status. Optionally supply categoryMapping to resolve unknown category names.
+// @Tags		transactions
+// @Accept		multipart/form-data
+// @Produce		json
+// @Param		file            formData file   true  "CSV file"
+// @Param		categoryMapping formData string false "JSON map of CSV category name to existing category ID"
+// @Success		202 {object} ImportJobResponse
 // @Failure		400 {object} common.ErrorResponse
 // @Failure		401 {object} common.ErrorResponse
 // @Security	BearerAuth
@@ -225,41 +267,106 @@ func (h *Handler) createTransfer(c *gin.Context) {
 func (h *Handler) importCsv(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 
+	buf, categoryMapping, ok := readCsvForm(c)
+	if !ok {
+		return
+	}
+
+	jobId := uuid.New().String()
+	job := &importJobState{status: "pending"}
+	h.jobs.Store(jobId, job)
+
+	go func() {
+		job.mu.Lock()
+		job.status = "running"
+		job.mu.Unlock()
+
+		result, err := h.svc.ImportFromCsv(buf, claims.Sub, categoryMapping)
+
+		job.mu.Lock()
+		defer job.mu.Unlock()
+		if err != nil {
+			job.status = "failed"
+			job.errMsg = err.Error()
+		} else {
+			job.status = "done"
+			job.result = result
+		}
+	}()
+
+	c.JSON(202, ImportJobResponse{JobId: jobId})
+}
+
+// @Summary		Get import job status
+// @Description	Poll the status of a background CSV import job. Status is one of: pending, running, done, failed.
+// @Tags		transactions
+// @Produce		json
+// @Param		jobId path string true "Job ID returned by POST /transactions/import"
+// @Success		200 {object} ImportJobStatus
+// @Failure		401 {object} common.ErrorResponse
+// @Failure		404 {object} common.ErrorResponse
+// @Security	BearerAuth
+// @Router		/transactions/import/jobs/{jobId} [get]
+func (h *Handler) getImportJob(c *gin.Context) {
+	jobId := c.Param("jobId")
+	raw, ok := h.jobs.Load(jobId)
+	if !ok {
+		common.RespondError(c, common.NewNotFound("import job not found"))
+		return
+	}
+
+	job := raw.(*importJobState)
+	job.mu.Lock()
+	defer job.mu.Unlock()
+
+	c.JSON(200, ImportJobStatus{
+		Status: job.status,
+		Result: job.result,
+		Error:  job.errMsg,
+	})
+}
+
+// readCsvForm reads the CSV file and optional categoryMapping from a multipart form.
+// Returns false and writes the error response itself on failure.
+func readCsvForm(c *gin.Context) ([]byte, map[string]string, bool) {
 	file, err := c.FormFile("file")
 	if err != nil {
 		common.RespondError(c, common.NewBadRequest("No file uploaded"))
-		return
+		return nil, nil, false
 	}
 
 	contentType := file.Header.Get("Content-Type")
 	if contentType != "text/csv" && !hasCSVExtension(file.Filename) {
 		common.RespondError(c, common.NewBadRequest("File must be a CSV file"))
-		return
+		return nil, nil, false
 	}
 
 	f, err := file.Open()
 	if err != nil {
 		common.RespondInternalError(c)
-		return
+		return nil, nil, false
 	}
 	defer f.Close()
 
 	buf, err := io.ReadAll(io.LimitReader(f, maxCSVBytes+1))
 	if err != nil {
 		common.RespondInternalError(c)
-		return
+		return nil, nil, false
 	}
 	if int64(len(buf)) > maxCSVBytes {
 		common.RespondError(c, common.NewBadRequest("CSV file exceeds 10 MB size limit"))
-		return
+		return nil, nil, false
 	}
 
-	result, err := h.svc.ImportFromCsv(buf, claims.Sub)
-	if err != nil {
-		common.RespondAppError(c, err)
-		return
+	var categoryMapping map[string]string
+	if raw := c.PostForm("categoryMapping"); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &categoryMapping); err != nil {
+			common.RespondError(c, common.NewBadRequest("Invalid categoryMapping: must be a JSON object"))
+			return nil, nil, false
+		}
 	}
-	c.JSON(201, result)
+
+	return buf, categoryMapping, true
 }
 
 func parseTimeQuery(c *gin.Context) (common.TimePeriod, int) {
