@@ -39,13 +39,13 @@
 
 > Make the data useful — summaries, trends, breakdowns.
 
-- [ ] **Category breakdown report** — income/expense split by category for a period
-- [ ] **Monthly trend report** — income vs expense over rolling N months
-- [ ] **Net worth snapshot** — sum of all account balances at a point in time
+- [x] **Category breakdown report** — income/expense split by category for a period
+- [x] **Monthly trend report** — income vs expense by month, zero-filled for empty months
+- [x] **Net worth snapshot** — sum of all active account balances
 - [ ] **Cash flow report** — projected vs actual cash flow for a period
-- [ ] **Top spending categories** — ranked by amount for a period
+- [x] **Top spending categories** — ranked by amount for a period (`limit` param, default 5)
 - [ ] **Year-over-year comparison** — compare the same period across years
-- [ ] **Custom date range filtering** — arbitrary `from`/`to` on all report endpoints
+- [x] **Custom date range filtering** — `from`/`to` on all report endpoints (default: current month)
 
 ---
 
@@ -167,7 +167,7 @@
 | Phase | Status | Notes |
 |-------|--------|-------|
 | 1 — Core Foundation | ✅ Done | All CRUD, scheduler, tests |
-| 2 — Reporting & Analytics | 🔲 Next | `/transactions/summary` exists; expand |
+| 2 — Reporting & Analytics | 🟡 Partial | 5/7 done; cash flow & YoY remain |
 | 3 — Budget Planning | 🔲 Planned | New domain |
 | 4 — Financial Goals | 🔲 Planned | New domain |
 | 5 — Multi-Currency | 🔲 Planned | Needs external rate source |
