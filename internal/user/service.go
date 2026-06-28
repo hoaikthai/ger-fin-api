@@ -128,3 +128,12 @@ func (s *Service) GetReportDefaults(userId string) (cashFlowMonths, yearOverYear
 	}
 	return settings.CashFlowMonths, settings.YearOverYearYears, nil
 }
+
+// GetBaseCurrency returns the user's preferred base currency, defaulting to "USD".
+func (s *Service) GetBaseCurrency(userId string) (string, error) {
+	settings, err := s.GetSettings(userId)
+	if err != nil {
+		return "USD", err
+	}
+	return settings.BaseCurrency, nil
+}
