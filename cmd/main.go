@@ -13,6 +13,7 @@ import (
 	"ger_fin_api/internal/auth"
 	"ger_fin_api/internal/category"
 	"ger_fin_api/internal/config"
+	"ger_fin_api/internal/currency"
 	"ger_fin_api/internal/database"
 	"ger_fin_api/internal/middleware"
 	"ger_fin_api/internal/migrations"
@@ -56,23 +57,33 @@ func main() {
 		log.Fatalf("failed to seed default categories: %v", err)
 	}
 
-	transactionSvc    := transaction.NewService(db)
-	recurringTxSvc    := recurringTx.NewService(db, transactionSvc)
-	reportSvc         := report.NewService(db)
+	currencySvc := currency.NewService(db, cfg.OXRAppID)
+	if err := currencySvc.FetchAndStoreRates(); err != nil {
+		log.Printf("initial rate fetch failed (continuing with cached rates): %v", err)
+	}
 
-	// Start recurring transaction scheduler
-	scheduler := recurringTx.NewScheduler(recurringTxSvc)
-	scheduler.Start()
-	defer scheduler.Stop()
+	transactionSvc := transaction.NewService(db)
+	recurringTxSvc := recurringTx.NewService(db, transactionSvc)
+	reportSvc      := report.NewService(db, currencySvc)
+
+	// Schedulers
+	recurringScheduler := recurringTx.NewScheduler(recurringTxSvc)
+	recurringScheduler.Start()
+	defer recurringScheduler.Stop()
+
+	currencyScheduler := currency.NewScheduler(currencySvc)
+	currencyScheduler.Start()
+	defer currencyScheduler.Stop()
 
 	// Handlers
 	authHandler        := auth.NewHandler(authSvc)
 	userHandler        := user.NewHandler(userSvc)
-	accountHandler     := account.NewHandler(accountSvc)
+	accountHandler     := account.NewHandler(accountSvc, currencySvc, userSvc)
 	categoryHandler    := category.NewHandler(categorySvc)
-	transactionHandler := transaction.NewHandler(transactionSvc)
+	transactionHandler := transaction.NewHandler(transactionSvc, currencySvc, userSvc)
 	recurringTxHandler := recurringTx.NewHandler(recurringTxSvc)
 	reportHandler      := report.NewHandler(reportSvc, userSvc)
+	currencyHandler    := currency.NewHandler(currencySvc)
 
 	// Auth middleware
 	jwtAuth := middleware.JWTAuth(cfg.JWT.Secret)
@@ -99,6 +110,7 @@ func main() {
 	transactionHandler.RegisterRoutes(api, jwtAuth)
 	recurringTxHandler.RegisterRoutes(api, jwtAuth)
 	reportHandler.RegisterRoutes(api, jwtAuth)
+	currencyHandler.RegisterRoutes(api, jwtAuth)
 
 	if err := r.Run(fmt.Sprintf(":%d", cfg.Port)); err != nil {
 		log.Fatalf("failed to start server: %v", err)

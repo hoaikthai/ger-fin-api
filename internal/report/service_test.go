@@ -69,7 +69,7 @@ func seedTx(t *testing.T, db *gorm.DB, userId, catId, accId string, typ common.T
 
 func TestRealDB_Report_CategoryBreakdown(t *testing.T) {
 	db := testutil.NewRealDB(t)
-	svc := NewService(db)
+	svc := NewService(db, nil)
 
 	userId := seedUser(t, db)
 	acc := seedAccount(t, db, userId, 1000)
@@ -84,7 +84,7 @@ func TestRealDB_Report_CategoryBreakdown(t *testing.T) {
 	seedTx(t, db, userId, expenseCat.ID, acc.ID, common.TransactionTypeExpense, -300, now)
 	seedTx(t, db, userId, expenseCat.ID, acc.ID, common.TransactionTypeExpense, -200, now)
 
-	resp, err := svc.CategoryBreakdown(userId, from, to)
+	resp, err := svc.CategoryBreakdown(userId, from, to, "USD")
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 
@@ -99,7 +99,7 @@ func TestRealDB_Report_CategoryBreakdown(t *testing.T) {
 
 func TestRealDB_Report_CategoryBreakdown_IsolatedByUser(t *testing.T) {
 	db := testutil.NewRealDB(t)
-	svc := NewService(db)
+	svc := NewService(db, nil)
 
 	userA := seedUser(t, db)
 	userB := seedUser(t, db)
@@ -115,7 +115,7 @@ func TestRealDB_Report_CategoryBreakdown_IsolatedByUser(t *testing.T) {
 	seedTx(t, db, userA, catA.ID, accA.ID, common.TransactionTypeIncome, 500, now)
 	seedTx(t, db, userB, catB.ID, accB.ID, common.TransactionTypeIncome, 9999, now)
 
-	resp, err := svc.CategoryBreakdown(userA, from, to)
+	resp, err := svc.CategoryBreakdown(userA, from, to, "USD")
 	require.NoError(t, err)
 	require.Len(t, resp.Income, 1)
 	assert.Equal(t, 500.0, resp.Income[0].Total)
@@ -123,7 +123,7 @@ func TestRealDB_Report_CategoryBreakdown_IsolatedByUser(t *testing.T) {
 
 func TestRealDB_Report_CategoryBreakdown_ExcludesTransfers(t *testing.T) {
 	db := testutil.NewRealDB(t)
-	svc := NewService(db)
+	svc := NewService(db, nil)
 	seedDefaultCategories(t, db)
 	txSvc := transaction.NewService(db)
 
@@ -146,7 +146,7 @@ func TestRealDB_Report_CategoryBreakdown_ExcludesTransfers(t *testing.T) {
 	}, userId)
 	require.NoError(t, err)
 
-	resp, err := svc.CategoryBreakdown(userId, from, to)
+	resp, err := svc.CategoryBreakdown(userId, from, to, "USD")
 	require.NoError(t, err)
 
 	for _, row := range resp.Expense {
@@ -159,7 +159,7 @@ func TestRealDB_Report_CategoryBreakdown_ExcludesTransfers(t *testing.T) {
 
 func TestRealDB_Report_MonthlyTrend(t *testing.T) {
 	db := testutil.NewRealDB(t)
-	svc := NewService(db)
+	svc := NewService(db, nil)
 
 	userId := seedUser(t, db)
 	acc := seedAccount(t, db, userId, 0)
@@ -176,24 +176,24 @@ func TestRealDB_Report_MonthlyTrend(t *testing.T) {
 	from := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(year, 2, 28, 23, 59, 59, 0, time.UTC)
 
-	rows, err := svc.MonthlyTrend(userId, from, to)
+	result, err := svc.MonthlyTrend(userId, from, to, "USD")
 	require.NoError(t, err)
-	require.Len(t, rows, 2)
+	require.Len(t, result.Months, 2)
 
-	assert.Equal(t, fmt.Sprintf("%d-01", year), rows[0].Month)
-	assert.Equal(t, 1000.0, rows[0].Income)
-	assert.Equal(t, 0.0, rows[0].Expense)
-	assert.Equal(t, 1000.0, rows[0].Net)
+	assert.Equal(t, fmt.Sprintf("%d-01", year), result.Months[0].Month)
+	assert.Equal(t, 1000.0, result.Months[0].Income)
+	assert.Equal(t, 0.0, result.Months[0].Expense)
+	assert.Equal(t, 1000.0, result.Months[0].Net)
 
-	assert.Equal(t, fmt.Sprintf("%d-02", year), rows[1].Month)
-	assert.Equal(t, 0.0, rows[1].Income)
-	assert.Equal(t, -400.0, rows[1].Expense)
-	assert.Equal(t, -400.0, rows[1].Net)
+	assert.Equal(t, fmt.Sprintf("%d-02", year), result.Months[1].Month)
+	assert.Equal(t, 0.0, result.Months[1].Income)
+	assert.Equal(t, -400.0, result.Months[1].Expense)
+	assert.Equal(t, -400.0, result.Months[1].Net)
 }
 
 func TestRealDB_Report_MonthlyTrend_FillsEmptyMonths(t *testing.T) {
 	db := testutil.NewRealDB(t)
-	svc := NewService(db)
+	svc := NewService(db, nil)
 
 	userId := seedUser(t, db)
 	acc := seedAccount(t, db, userId, 0)
@@ -206,25 +206,25 @@ func TestRealDB_Report_MonthlyTrend_FillsEmptyMonths(t *testing.T) {
 	from := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(year, 3, 31, 23, 59, 59, 0, time.UTC)
 
-	rows, err := svc.MonthlyTrend(userId, from, to)
+	result, err := svc.MonthlyTrend(userId, from, to, "USD")
 	require.NoError(t, err)
-	require.Len(t, rows, 3)
+	require.Len(t, result.Months, 3)
 
-	assert.Equal(t, 500.0, rows[0].Income)
-	assert.Equal(t, 0.0, rows[1].Income)
-	assert.Equal(t, 0.0, rows[1].Expense)
-	assert.Equal(t, 0.0, rows[2].Income)
+	assert.Equal(t, 500.0, result.Months[0].Income)
+	assert.Equal(t, 0.0, result.Months[1].Income)
+	assert.Equal(t, 0.0, result.Months[1].Expense)
+	assert.Equal(t, 0.0, result.Months[2].Income)
 }
 
 func TestRealDB_Report_NetWorth(t *testing.T) {
 	db := testutil.NewRealDB(t)
-	svc := NewService(db)
+	svc := NewService(db, nil)
 
 	userId := seedUser(t, db)
 	seedAccount(t, db, userId, 5000)
 	seedAccount(t, db, userId, 2000)
 
-	resp, err := svc.NetWorth(userId)
+	resp, err := svc.NetWorth(userId, "USD")
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	assert.Equal(t, 7000.0, resp.Total)
@@ -233,14 +233,14 @@ func TestRealDB_Report_NetWorth(t *testing.T) {
 
 func TestRealDB_Report_NetWorth_IsolatedByUser(t *testing.T) {
 	db := testutil.NewRealDB(t)
-	svc := NewService(db)
+	svc := NewService(db, nil)
 
 	userA := seedUser(t, db)
 	userB := seedUser(t, db)
 	seedAccount(t, db, userA, 3000)
 	seedAccount(t, db, userB, 9999)
 
-	resp, err := svc.NetWorth(userA)
+	resp, err := svc.NetWorth(userA, "USD")
 	require.NoError(t, err)
 	assert.Equal(t, 3000.0, resp.Total)
 	assert.Len(t, resp.Accounts, 1)
@@ -248,7 +248,7 @@ func TestRealDB_Report_NetWorth_IsolatedByUser(t *testing.T) {
 
 func TestRealDB_Report_TopCategories(t *testing.T) {
 	db := testutil.NewRealDB(t)
-	svc := NewService(db)
+	svc := NewService(db, nil)
 
 	userId := seedUser(t, db)
 	acc := seedAccount(t, db, userId, 0)
@@ -274,7 +274,7 @@ func TestRealDB_Report_TopCategories(t *testing.T) {
 
 func TestRealDB_Report_TopCategories_PercentageRelativeToAll(t *testing.T) {
 	db := testutil.NewRealDB(t)
-	svc := NewService(db)
+	svc := NewService(db, nil)
 
 	userId := seedUser(t, db)
 	acc := seedAccount(t, db, userId, 0)
@@ -314,7 +314,7 @@ func seedRecurringTx(t *testing.T, db *gorm.DB, userId, catId, accId string, typ
 
 func TestRealDB_CashFlow_Actual(t *testing.T) {
 	db := testutil.NewRealDB(t)
-	svc := NewService(db)
+	svc := NewService(db, nil)
 
 	userId := seedUser(t, db)
 	acc := seedAccount(t, db, userId, 0)
@@ -339,7 +339,7 @@ func TestRealDB_CashFlow_Actual(t *testing.T) {
 
 func TestRealDB_CashFlow_ProjectedRollingAverage(t *testing.T) {
 	db := testutil.NewRealDB(t)
-	svc := NewService(db)
+	svc := NewService(db, nil)
 
 	userId := seedUser(t, db)
 	acc := seedAccount(t, db, userId, 0)
@@ -365,7 +365,7 @@ func TestRealDB_CashFlow_ProjectedRollingAverage(t *testing.T) {
 
 func TestRealDB_CashFlow_RecurringComponent(t *testing.T) {
 	db := testutil.NewRealDB(t)
-	svc := NewService(db)
+	svc := NewService(db, nil)
 
 	userId := seedUser(t, db)
 	acc := seedAccount(t, db, userId, 1000)
@@ -387,7 +387,7 @@ func TestRealDB_CashFlow_RecurringComponent(t *testing.T) {
 
 func TestRealDB_CashFlow_ExcludesTransfers(t *testing.T) {
 	db := testutil.NewRealDB(t)
-	svc := NewService(db)
+	svc := NewService(db, nil)
 	seedDefaultCategories(t, db)
 	txSvc := transaction.NewService(db)
 
@@ -419,7 +419,7 @@ func TestRealDB_CashFlow_ExcludesTransfers(t *testing.T) {
 
 func TestRealDB_CashFlow_IsolatedByUser(t *testing.T) {
 	db := testutil.NewRealDB(t)
-	svc := NewService(db)
+	svc := NewService(db, nil)
 
 	userA := seedUser(t, db)
 	userB := seedUser(t, db)
@@ -442,7 +442,7 @@ func TestRealDB_CashFlow_IsolatedByUser(t *testing.T) {
 
 func TestRealDB_YearOverYear(t *testing.T) {
 	db := testutil.NewRealDB(t)
-	svc := NewService(db)
+	svc := NewService(db, nil)
 
 	userId := seedUser(t, db)
 	acc := seedAccount(t, db, userId, 0)
@@ -482,7 +482,7 @@ func TestRealDB_YearOverYear(t *testing.T) {
 
 func TestRealDB_YearOverYear_FillsEmptyMonths(t *testing.T) {
 	db := testutil.NewRealDB(t)
-	svc := NewService(db)
+	svc := NewService(db, nil)
 
 	userId := seedUser(t, db)
 	acc := seedAccount(t, db, userId, 0)
@@ -507,7 +507,7 @@ func TestRealDB_YearOverYear_FillsEmptyMonths(t *testing.T) {
 
 func TestRealDB_YearOverYear_MonthsAxisAnchored(t *testing.T) {
 	db := testutil.NewRealDB(t)
-	svc := NewService(db)
+	svc := NewService(db, nil)
 
 	userId := seedUser(t, db)
 
@@ -526,7 +526,7 @@ func TestRealDB_YearOverYear_MonthsAxisAnchored(t *testing.T) {
 
 func TestRealDB_YearOverYear_IsolatedByUser(t *testing.T) {
 	db := testutil.NewRealDB(t)
-	svc := NewService(db)
+	svc := NewService(db, nil)
 
 	userA := seedUser(t, db)
 	userB := seedUser(t, db)

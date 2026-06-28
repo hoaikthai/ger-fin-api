@@ -89,11 +89,11 @@
 
 > Handle accounts and transactions in different currencies.
 
-- [ ] **Exchange rate store** — fetch & cache rates (e.g. via ECB or Open Exchange Rates)
-- [ ] **Base currency config** — per-user preferred display currency
-- [ ] **Balance normalization** — convert all account balances to base currency for net worth
-- [ ] **Transaction currency field** — record original currency + amount alongside base amount
-- [ ] **Rate history** — store historical rates used at transaction time
+- [x] **Exchange rate store** — fetch & cache rates (e.g. via ECB or Open Exchange Rates)
+- [x] **Base currency config** — per-user preferred display currency
+- [x] **Balance normalization** — convert all account balances to base currency for net worth
+- [x] **Transaction currency field** — record original currency + amount alongside base amount
+- [x] **Rate history** — store historical rates used at transaction time
 
 ---
 
@@ -184,7 +184,7 @@
 | 2.5 — User Preferences & Settings | ✅ Done | Settings CRUD, reporting defaults wired in |
 | 3 — Budget Planning | 🔲 Planned | New domain |
 | 4 — Financial Goals | 🔲 Planned | New domain |
-| 5 — Multi-Currency | 🔲 Planned | Needs external rate source |
+| 5 — Multi-Currency | ✅ Done | OXR rate fetch, base currency normalization on accounts, transactions, and reports |
 | 6 — Import / Export | 🟡 Partial | CSV export + import done; Excel pending |
 | 7 — Notifications | 🔲 Planned | New domain |
 | 8 — Tags | 🔲 Planned | New domain |
