@@ -17,22 +17,22 @@ import (
 
 // mockService is a handwritten test double for ServiceI.
 type mockService struct {
-	categoryBreakdownFn func(userId string, from, to time.Time) (*CategoryBreakdownResponse, error)
-	monthlyTrendFn      func(userId string, from, to time.Time) ([]MonthRow, error)
-	netWorthFn          func(userId string) (*NetWorthResponse, error)
+	categoryBreakdownFn func(userId string, from, to time.Time, baseCurrency string) (*CategoryBreakdownResponse, error)
+	monthlyTrendFn      func(userId string, from, to time.Time, baseCurrency string) (*MonthlyTrendResponse, error)
+	netWorthFn          func(userId string, baseCurrency string) (*NetWorthResponse, error)
 	topCategoriesFn     func(userId string, from, to time.Time, limit int) ([]CategoryRow, error)
 	cashFlowFn          func(userId string, from, to time.Time, lookbackMonths int) (*CashFlowResponse, error)
 	yearOverYearFn      func(userId string, from, to time.Time, years int) (*YearOverYearResponse, error)
 }
 
-func (m *mockService) CategoryBreakdown(userId string, from, to time.Time) (*CategoryBreakdownResponse, error) {
-	return m.categoryBreakdownFn(userId, from, to)
+func (m *mockService) CategoryBreakdown(userId string, from, to time.Time, baseCurrency string) (*CategoryBreakdownResponse, error) {
+	return m.categoryBreakdownFn(userId, from, to, baseCurrency)
 }
-func (m *mockService) MonthlyTrend(userId string, from, to time.Time) ([]MonthRow, error) {
-	return m.monthlyTrendFn(userId, from, to)
+func (m *mockService) MonthlyTrend(userId string, from, to time.Time, baseCurrency string) (*MonthlyTrendResponse, error) {
+	return m.monthlyTrendFn(userId, from, to, baseCurrency)
 }
-func (m *mockService) NetWorth(userId string) (*NetWorthResponse, error) {
-	return m.netWorthFn(userId)
+func (m *mockService) NetWorth(userId string, baseCurrency string) (*NetWorthResponse, error) {
+	return m.netWorthFn(userId, baseCurrency)
 }
 func (m *mockService) TopCategories(userId string, from, to time.Time, limit int) ([]CategoryRow, error) {
 	return m.topCategoriesFn(userId, from, to, limit)
@@ -48,6 +48,7 @@ func (m *mockService) YearOverYear(userId string, from, to time.Time, years int)
 type mockSettings struct{}
 
 func (mockSettings) GetReportDefaults(_ string) (int, int, error) { return 3, 2, nil }
+func (mockSettings) GetBaseCurrency(_ string) (string, error)     { return "USD", nil }
 
 // newTestRouter wires up the report handler against a fake auth middleware that
 // injects the given userId into the Gin context, bypassing real JWT verification.
@@ -78,7 +79,7 @@ func TestHandler_CategoryBreakdown_Success(t *testing.T) {
 		Expense: []CategoryRow{{CategoryId: "c2", CategoryName: "Food", Total: -300, Percentage: 100}},
 	}
 	svc := &mockService{
-		categoryBreakdownFn: func(userId string, from, to time.Time) (*CategoryBreakdownResponse, error) {
+		categoryBreakdownFn: func(userId string, from, to time.Time, baseCurrency string) (*CategoryBreakdownResponse, error) {
 			assert.Equal(t, "user-1", userId)
 			return want, nil
 		},
@@ -99,7 +100,7 @@ func TestHandler_CategoryBreakdown_DefaultDateRange(t *testing.T) {
 
 	var capturedFrom time.Time
 	svc := &mockService{
-		categoryBreakdownFn: func(userId string, from, to time.Time) (*CategoryBreakdownResponse, error) {
+		categoryBreakdownFn: func(userId string, from, to time.Time, baseCurrency string) (*CategoryBreakdownResponse, error) {
 			capturedFrom = from
 			return &CategoryBreakdownResponse{Income: []CategoryRow{}, Expense: []CategoryRow{}}, nil
 		},
@@ -114,7 +115,7 @@ func TestHandler_CategoryBreakdown_DefaultDateRange(t *testing.T) {
 func TestHandler_CategoryBreakdown_CustomDateRange(t *testing.T) {
 	var capturedFrom, capturedTo time.Time
 	svc := &mockService{
-		categoryBreakdownFn: func(userId string, from, to time.Time) (*CategoryBreakdownResponse, error) {
+		categoryBreakdownFn: func(userId string, from, to time.Time, baseCurrency string) (*CategoryBreakdownResponse, error) {
 			capturedFrom = from
 			capturedTo = to
 			return &CategoryBreakdownResponse{Income: []CategoryRow{}, Expense: []CategoryRow{}}, nil
@@ -140,7 +141,7 @@ func TestHandler_CategoryBreakdown_InvalidDate(t *testing.T) {
 
 func TestHandler_CategoryBreakdown_ServiceError(t *testing.T) {
 	svc := &mockService{
-		categoryBreakdownFn: func(userId string, from, to time.Time) (*CategoryBreakdownResponse, error) {
+		categoryBreakdownFn: func(userId string, from, to time.Time, baseCurrency string) (*CategoryBreakdownResponse, error) {
 			return nil, errors.New("db error")
 		},
 	}
@@ -151,24 +152,24 @@ func TestHandler_CategoryBreakdown_ServiceError(t *testing.T) {
 // ── MonthlyTrend ─────────────────────────────────────────────────────────────
 
 func TestHandler_MonthlyTrend_Success(t *testing.T) {
-	want := []MonthRow{
+	wantMonths := []MonthRow{
 		{Month: "2026-01", Income: 1000, Expense: -300, Net: 700},
 		{Month: "2026-02", Income: 0, Expense: 0, Net: 0},
 	}
 	svc := &mockService{
-		monthlyTrendFn: func(userId string, from, to time.Time) ([]MonthRow, error) {
-			return want, nil
+		monthlyTrendFn: func(userId string, from, to time.Time, baseCurrency string) (*MonthlyTrendResponse, error) {
+			return &MonthlyTrendResponse{BaseCurrency: "USD", Months: wantMonths}, nil
 		},
 	}
 
 	w := doGet(newTestRouter(svc, "user-1"), "/reports/monthly-trend?from=2026-01-01&to=2026-02-28")
 
 	assert.Equal(t, http.StatusOK, w.Code)
-	var got []MonthRow
+	var got MonthlyTrendResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.Len(t, got, 2)
-	assert.Equal(t, "2026-01", got[0].Month)
-	assert.Equal(t, 700.0, got[0].Net)
+	assert.Len(t, got.Months, 2)
+	assert.Equal(t, "2026-01", got.Months[0].Month)
+	assert.Equal(t, 700.0, got.Months[0].Net)
 }
 
 func TestHandler_MonthlyTrend_InvalidDate(t *testing.T) {
@@ -179,7 +180,7 @@ func TestHandler_MonthlyTrend_InvalidDate(t *testing.T) {
 
 func TestHandler_MonthlyTrend_ServiceError(t *testing.T) {
 	svc := &mockService{
-		monthlyTrendFn: func(userId string, from, to time.Time) ([]MonthRow, error) {
+		monthlyTrendFn: func(userId string, from, to time.Time, baseCurrency string) (*MonthlyTrendResponse, error) {
 			return nil, errors.New("db error")
 		},
 	}
@@ -198,7 +199,7 @@ func TestHandler_NetWorth_Success(t *testing.T) {
 		},
 	}
 	svc := &mockService{
-		netWorthFn: func(userId string) (*NetWorthResponse, error) {
+		netWorthFn: func(userId string, baseCurrency string) (*NetWorthResponse, error) {
 			assert.Equal(t, "user-1", userId)
 			return want, nil
 		},
@@ -215,7 +216,7 @@ func TestHandler_NetWorth_Success(t *testing.T) {
 
 func TestHandler_NetWorth_ServiceError(t *testing.T) {
 	svc := &mockService{
-		netWorthFn: func(userId string) (*NetWorthResponse, error) {
+		netWorthFn: func(userId string, baseCurrency string) (*NetWorthResponse, error) {
 			return nil, errors.New("db error")
 		},
 	}

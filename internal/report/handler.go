@@ -14,6 +14,7 @@ import (
 // SettingsProvider supplies per-user defaults for report parameters.
 type SettingsProvider interface {
 	GetReportDefaults(userId string) (cashFlowMonths, yearOverYearYears int, err error)
+	GetBaseCurrency(userId string) (string, error)
 }
 
 type Handler struct {
@@ -71,19 +72,21 @@ func parseDateRange(c *gin.Context) (time.Time, time.Time, error) {
 // @Router		/reports/category-breakdown [get]
 func (h *Handler) categoryBreakdown(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
-
 	from, to, err := parseDateRange(c)
 	if err != nil {
 		common.RespondError(c, common.NewBadRequest(err.Error()))
 		return
 	}
-
-	resp, err := h.svc.CategoryBreakdown(claims.Sub, from, to)
+	bc, _ := h.settings.GetBaseCurrency(claims.Sub)
+	if bc == "" {
+		bc = "USD"
+	}
+	result, err := h.svc.CategoryBreakdown(claims.Sub, from, to, bc)
 	if err != nil {
 		common.RespondInternalError(c)
 		return
 	}
-	c.JSON(200, resp)
+	c.JSON(200, result)
 }
 
 // @Summary		Monthly trend
@@ -92,26 +95,28 @@ func (h *Handler) categoryBreakdown(c *gin.Context) {
 // @Produce		json
 // @Param		from query string false "Start date (YYYY-MM-DD), defaults to first of current month"
 // @Param		to   query string false "End date   (YYYY-MM-DD), defaults to today"
-// @Success		200 {array}  MonthRow
+// @Success		200 {object} MonthlyTrendResponse
 // @Failure		400 {object} common.ErrorResponse
 // @Failure		401 {object} common.ErrorResponse
 // @Security	BearerAuth
 // @Router		/reports/monthly-trend [get]
 func (h *Handler) monthlyTrend(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
-
 	from, to, err := parseDateRange(c)
 	if err != nil {
 		common.RespondError(c, common.NewBadRequest(err.Error()))
 		return
 	}
-
-	rows, err := h.svc.MonthlyTrend(claims.Sub, from, to)
+	bc, _ := h.settings.GetBaseCurrency(claims.Sub)
+	if bc == "" {
+		bc = "USD"
+	}
+	result, err := h.svc.MonthlyTrend(claims.Sub, from, to, bc)
 	if err != nil {
 		common.RespondInternalError(c)
 		return
 	}
-	c.JSON(200, rows)
+	c.JSON(200, result)
 }
 
 // @Summary		Net worth
@@ -124,13 +129,16 @@ func (h *Handler) monthlyTrend(c *gin.Context) {
 // @Router		/reports/net-worth [get]
 func (h *Handler) netWorth(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
-
-	resp, err := h.svc.NetWorth(claims.Sub)
+	bc, _ := h.settings.GetBaseCurrency(claims.Sub)
+	if bc == "" {
+		bc = "USD"
+	}
+	result, err := h.svc.NetWorth(claims.Sub, bc)
 	if err != nil {
 		common.RespondInternalError(c)
 		return
 	}
-	c.JSON(200, resp)
+	c.JSON(200, result)
 }
 
 // @Summary		Top spending categories

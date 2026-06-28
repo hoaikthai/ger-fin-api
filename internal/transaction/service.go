@@ -115,18 +115,21 @@ func (s *Service) Create(dto CreateTransactionDto, userId string) (*Transaction,
 	}
 
 	tx := &Transaction{
-		Type:            string(dto.Type),
-		Amount:          dto.Amount,
-		Description:     dto.Description,
-		CategoryId:      dto.CategoryId,
-		UserId:          userId,
-		AccountId:       dto.AccountId,
-		TransactionDate: txDate,
+		Type:             string(dto.Type),
+		Amount:           dto.Amount,
+		Description:      dto.Description,
+		CategoryId:       dto.CategoryId,
+		UserId:           userId,
+		AccountId:        dto.AccountId,
+		TransactionDate:  txDate,
+		OriginalCurrency: dto.OriginalCurrency,
+		OriginalAmount:   dto.OriginalAmount,
 	}
 
 	if err := s.db.Create(tx).Error; err != nil {
 		return nil, err
 	}
+	tx.Account = &acc
 	return tx, nil
 }
 
@@ -211,6 +214,12 @@ func (s *Service) Update(id string, dto UpdateTransactionDto, userId string) (*T
 	if dto.TransactionDate != nil {
 		tx.TransactionDate = *dto.TransactionDate
 	}
+	if dto.OriginalCurrency != nil {
+		tx.OriginalCurrency = dto.OriginalCurrency
+	}
+	if dto.OriginalAmount != nil {
+		tx.OriginalAmount = dto.OriginalAmount
+	}
 
 	if err := s.db.Save(tx).Error; err != nil {
 		return nil, err
@@ -276,6 +285,16 @@ func (s *Service) Transfer(dto CreateTransferDto, userId string) (*TransferResul
 	}
 
 	abs := math.Abs(dto.Amount)
+	destAbs := abs
+	if srcAcc.Currency != dstAcc.Currency {
+		if dto.DestinationAmount == nil {
+			return nil, common.NewBadRequest("destinationAmount is required for cross-currency transfers")
+		}
+		destAbs = math.Abs(*dto.DestinationAmount)
+	} else if dto.DestinationAmount != nil {
+		destAbs = math.Abs(*dto.DestinationAmount)
+	}
+
 	srcDto := CreateTransactionDto{
 		Type:            common.TransactionTypeExpense,
 		Amount:          -abs,
@@ -286,7 +305,7 @@ func (s *Service) Transfer(dto CreateTransferDto, userId string) (*TransferResul
 	}
 	dstDto := CreateTransactionDto{
 		Type:            common.TransactionTypeIncome,
-		Amount:          abs,
+		Amount:          destAbs,
 		Description:     dto.Description,
 		CategoryId:      inCat.ID,
 		AccountId:       dto.DestinationAccountId,

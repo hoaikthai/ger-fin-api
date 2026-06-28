@@ -8,8 +8,9 @@ type CategoryRow struct {
 }
 
 type CategoryBreakdownResponse struct {
-	Income  []CategoryRow `json:"income"`
-	Expense []CategoryRow `json:"expense"`
+	BaseCurrency string        `json:"baseCurrency"`
+	Income       []CategoryRow `json:"income"`
+	Expense      []CategoryRow `json:"expense"`
 }
 
 type MonthRow struct {
@@ -19,16 +20,23 @@ type MonthRow struct {
 	Net     float64 `json:"net"`
 }
 
+type MonthlyTrendResponse struct {
+	BaseCurrency string     `json:"baseCurrency"`
+	Months       []MonthRow `json:"months"`
+}
+
 type NetWorthAccount struct {
-	AccountId string  `json:"accountId"`
-	Name      string  `json:"name"`
-	Currency  string  `json:"currency"`
-	Balance   float64 `json:"balance"`
+	AccountId           string   `json:"accountId"`
+	Name                string   `json:"name"`
+	Currency            string   `json:"currency"`
+	Balance             float64  `json:"balance"`
+	BaseCurrencyBalance *float64 `json:"baseCurrencyBalance,omitempty"`
 }
 
 type NetWorthResponse struct {
-	Total    float64           `json:"total"`
-	Accounts []NetWorthAccount `json:"accounts"`
+	Total        float64           `json:"total"`
+	BaseCurrency string            `json:"baseCurrency"`
+	Accounts     []NetWorthAccount `json:"accounts"`
 }
 
 type CashFlowPeriod struct {

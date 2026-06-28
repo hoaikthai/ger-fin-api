@@ -21,6 +21,8 @@ type Transaction struct {
 	TransactionDate        time.Time           `gorm:"column:transactionDate"                    json:"transactionDate"`
 	RelatedTransactionId   *string             `gorm:"column:relatedTransactionId;type:uuid"     json:"relatedTransactionId,omitempty"`
 	RecurringTransactionId *string             `gorm:"column:recurringTransactionId;type:uuid"   json:"recurringTransactionId,omitempty"`
+	OriginalCurrency       *string             `gorm:"column:originalCurrency;type:varchar(3)"   json:"originalCurrency,omitempty"`
+	OriginalAmount         *float64            `gorm:"column:originalAmount;type:numeric(15,2)"  json:"originalAmount,omitempty"`
 }
 
 func (Transaction) TableName() string { return "transaction" }

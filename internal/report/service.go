@@ -2,7 +2,9 @@ package report
 
 import (
 	"fmt"
+	"log"
 	"math"
+	"sort"
 	"time"
 
 	"ger_fin_api/internal/account"
@@ -12,120 +14,170 @@ import (
 )
 
 type ServiceI interface {
-	CategoryBreakdown(userId string, from, to time.Time) (*CategoryBreakdownResponse, error)
-	MonthlyTrend(userId string, from, to time.Time) ([]MonthRow, error)
-	NetWorth(userId string) (*NetWorthResponse, error)
+	CategoryBreakdown(userId string, from, to time.Time, baseCurrency string) (*CategoryBreakdownResponse, error)
+	MonthlyTrend(userId string, from, to time.Time, baseCurrency string) (*MonthlyTrendResponse, error)
+	NetWorth(userId string, baseCurrency string) (*NetWorthResponse, error)
 	TopCategories(userId string, from, to time.Time, limit int) ([]CategoryRow, error)
 	CashFlow(userId string, from, to time.Time, lookbackMonths int) (*CashFlowResponse, error)
 	YearOverYear(userId string, from, to time.Time, years int) (*YearOverYearResponse, error)
 }
 
-type Service struct {
-	db *gorm.DB
+// CurrencyConverter converts an amount from one currency to another.
+type CurrencyConverter interface {
+	Convert(amount float64, from, to string) (float64, error)
 }
 
-func NewService(db *gorm.DB) *Service {
-	return &Service{db: db}
+type Service struct {
+	db       *gorm.DB
+	currency CurrencyConverter
+}
+
+func NewService(db *gorm.DB, currency CurrencyConverter) *Service {
+	return &Service{db: db, currency: currency}
 }
 
 type categoryAgg struct {
-	CategoryId   string  `gorm:"column:category_id"`
-	CategoryName string  `gorm:"column:category_name"`
-	TxType       string  `gorm:"column:tx_type"`
-	Total        float64 `gorm:"column:total"`
+	CategoryId      string  `gorm:"column:category_id"`
+	CategoryName    string  `gorm:"column:category_name"`
+	TxType          string  `gorm:"column:tx_type"`
+	AccountCurrency string  `gorm:"column:account_currency"`
+	Total           float64 `gorm:"column:total"`
 }
 
-func (s *Service) CategoryBreakdown(userId string, from, to time.Time) (*CategoryBreakdownResponse, error) {
+func (s *Service) CategoryBreakdown(userId string, from, to time.Time, baseCurrency string) (*CategoryBreakdownResponse, error) {
 	var rows []categoryAgg
 	err := s.db.Raw(`
 		SELECT t."categoryId"  AS category_id,
 		       c."name"        AS category_name,
 		       t."type"        AS tx_type,
+		       a."currency"    AS account_currency,
 		       SUM(t."amount") AS total
 		FROM "transaction" t
 		JOIN "category" c ON c."id" = t."categoryId"
+		JOIN "account"  a ON a."id" = t."accountId"
 		WHERE t."userId" = ?
 		  AND t."transactionDate" >= ?
 		  AND t."transactionDate" <= ?
 		  AND t."relatedTransactionId" IS NULL
 		  AND t."deletedAt" IS NULL
-		GROUP BY t."categoryId", c."name", t."type"
+		GROUP BY t."categoryId", c."name", t."type", a."currency"
 		ORDER BY ABS(SUM(t."amount")) DESC
 	`, userId, from, to).Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
 
-	var totalIncome, totalExpense float64
+	// Aggregate per category, converting to baseCurrency
+	type catKey struct{ id, name, txType string }
+	catTotals := make(map[catKey]float64)
 	for _, r := range rows {
-		if r.TxType == "income" {
-			totalIncome += r.Total
+		key := catKey{r.CategoryId, r.CategoryName, r.TxType}
+		converted := r.Total
+		if s.currency != nil {
+			if c, err := s.currency.Convert(r.Total, r.AccountCurrency, baseCurrency); err == nil {
+				converted = c
+			} else {
+				log.Printf("report: CategoryBreakdown skipping row (currency %s): %v", r.AccountCurrency, err)
+				continue // excluded from aggregation — rate unavailable
+			}
+		}
+		catTotals[key] += converted
+	}
+
+	var totalIncome, totalExpense float64
+	for k, total := range catTotals {
+		if k.txType == "income" {
+			totalIncome += total
 		} else {
-			totalExpense += math.Abs(r.Total)
+			totalExpense += math.Abs(total)
 		}
 	}
 
 	resp := &CategoryBreakdownResponse{
-		Income:  []CategoryRow{},
-		Expense: []CategoryRow{},
+		BaseCurrency: baseCurrency,
+		Income:       []CategoryRow{},
+		Expense:      []CategoryRow{},
 	}
-	for _, r := range rows {
+	for k, total := range catTotals {
 		var pct float64
-		if r.TxType == "income" && totalIncome > 0 {
-			pct = math.Round((r.Total/totalIncome)*10000) / 100
-		} else if r.TxType == "expense" && totalExpense > 0 {
-			pct = math.Round((math.Abs(r.Total)/totalExpense)*10000) / 100
+		if k.txType == "income" && totalIncome > 0 {
+			pct = math.Round((total/totalIncome)*10000) / 100
+		} else if k.txType == "expense" && totalExpense > 0 {
+			pct = math.Round((math.Abs(total)/totalExpense)*10000) / 100
 		}
 		row := CategoryRow{
-			CategoryId:   r.CategoryId,
-			CategoryName: r.CategoryName,
-			Total:        r.Total,
+			CategoryId:   k.id,
+			CategoryName: k.name,
+			Total:        total,
 			Percentage:   pct,
 		}
-		if r.TxType == "income" {
+		if k.txType == "income" {
 			resp.Income = append(resp.Income, row)
 		} else {
 			resp.Expense = append(resp.Expense, row)
 		}
 	}
+	sort.Slice(resp.Income, func(i, j int) bool { return resp.Income[i].Total > resp.Income[j].Total })
+	sort.Slice(resp.Expense, func(i, j int) bool { return math.Abs(resp.Expense[i].Total) > math.Abs(resp.Expense[j].Total) })
 	return resp, nil
 }
 
 type monthAgg struct {
-	Month   string  `gorm:"column:month"`
-	Income  float64 `gorm:"column:income"`
-	Expense float64 `gorm:"column:expense"`
+	Month           string  `gorm:"column:month"`
+	AccountCurrency string  `gorm:"column:account_currency"`
+	Income          float64 `gorm:"column:income"`
+	Expense         float64 `gorm:"column:expense"`
 }
 
-func (s *Service) MonthlyTrend(userId string, from, to time.Time) ([]MonthRow, error) {
+func (s *Service) MonthlyTrend(userId string, from, to time.Time, baseCurrency string) (*MonthlyTrendResponse, error) {
 	var rows []monthAgg
 	err := s.db.Raw(`
 		SELECT TO_CHAR(t."transactionDate", 'YYYY-MM') AS month,
+		       a."currency" AS account_currency,
 		       SUM(CASE WHEN t."type" = 'income'  THEN t."amount" ELSE 0 END) AS income,
 		       SUM(CASE WHEN t."type" = 'expense' THEN t."amount" ELSE 0 END) AS expense
 		FROM "transaction" t
+		JOIN "account" a ON a."id" = t."accountId"
 		WHERE t."userId" = ?
 		  AND t."transactionDate" >= ?
 		  AND t."transactionDate" <= ?
 		  AND t."relatedTransactionId" IS NULL
 		  AND t."deletedAt" IS NULL
-		GROUP BY TO_CHAR(t."transactionDate", 'YYYY-MM')
+		GROUP BY TO_CHAR(t."transactionDate", 'YYYY-MM'), a."currency"
 		ORDER BY month ASC
 	`, userId, from, to).Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
 
-	rowMap := make(map[string]MonthRow, len(rows))
+	// Aggregate per month, converting to baseCurrency
+	rowMap := make(map[string]MonthRow)
 	for _, r := range rows {
+		income := r.Income
+		expense := r.Expense
+		if s.currency != nil {
+			incConverted, incErr := s.currency.Convert(r.Income, r.AccountCurrency, baseCurrency)
+			expConverted, expErr := s.currency.Convert(r.Expense, r.AccountCurrency, baseCurrency)
+			if incErr != nil || expErr != nil {
+				log.Printf("report: MonthlyTrend skipping month %s row (currency %s): income_err=%v expense_err=%v", r.Month, r.AccountCurrency, incErr, expErr)
+				continue // excluded — rate unavailable
+			}
+			income = incConverted
+			expense = expConverted
+		}
+		prev := rowMap[r.Month]
 		rowMap[r.Month] = MonthRow{
 			Month:   r.Month,
-			Income:  r.Income,
-			Expense: r.Expense,
-			Net:     r.Income + r.Expense,
+			Income:  prev.Income + income,
+			Expense: prev.Expense + expense,
+			Net:     prev.Net + income + expense,
 		}
 	}
-	return fillMonths(from, to, rowMap), nil
+
+	return &MonthlyTrendResponse{
+		BaseCurrency: baseCurrency,
+		Months:       fillMonths(from, to, rowMap),
+	}, nil
 }
 
 func fillMonths(from, to time.Time, data map[string]MonthRow) []MonthRow {
@@ -144,21 +196,35 @@ func fillMonths(from, to time.Time, data map[string]MonthRow) []MonthRow {
 	return result
 }
 
-func (s *Service) NetWorth(userId string) (*NetWorthResponse, error) {
+func (s *Service) NetWorth(userId string, baseCurrency string) (*NetWorthResponse, error) {
 	var accounts []account.Account
 	if err := s.db.Where(`"userId" = ? AND "isActive" = ?`, userId, true).Find(&accounts).Error; err != nil {
 		return nil, err
 	}
 
-	resp := &NetWorthResponse{Accounts: make([]NetWorthAccount, 0, len(accounts))}
+	resp := &NetWorthResponse{
+		BaseCurrency: baseCurrency,
+		Accounts:     make([]NetWorthAccount, 0, len(accounts)),
+	}
 	for _, a := range accounts {
-		resp.Total += a.Balance
-		resp.Accounts = append(resp.Accounts, NetWorthAccount{
+		nwa := NetWorthAccount{
 			AccountId: a.ID,
 			Name:      a.Name,
 			Currency:  a.Currency,
 			Balance:   a.Balance,
-		})
+		}
+		if s.currency != nil {
+			if converted, err := s.currency.Convert(a.Balance, a.Currency, baseCurrency); err == nil {
+				nwa.BaseCurrencyBalance = &converted
+				resp.Total += converted
+			} else {
+				log.Printf("report: NetWorth skipping account %s (currency %s): %v", a.ID, a.Currency, err)
+				// excluded from total — rate unavailable
+			}
+		} else {
+			resp.Total += a.Balance
+		}
+		resp.Accounts = append(resp.Accounts, nwa)
 	}
 	return resp, nil
 }

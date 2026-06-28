@@ -3,6 +3,7 @@ package transaction
 import (
 	"encoding/json"
 	"io"
+	"net/http"
 	"strconv"
 	"sync"
 
@@ -22,17 +23,28 @@ type importJobState struct {
 	errMsg string
 }
 
-type Handler struct {
-	svc  *Service
-	jobs sync.Map // string → *importJobState
+// CurrencyConverter converts an amount from one currency to another.
+type CurrencyConverter interface {
+	Convert(amount float64, from, to string) (float64, error)
 }
 
-func NewHandler(svc *Service) *Handler {
-	return &Handler{svc: svc}
+// BaseCurrencyProvider returns the user's preferred base currency.
+type BaseCurrencyProvider interface {
+	GetBaseCurrency(userId string) (string, error)
+}
+
+type Handler struct {
+	svc         *Service
+	currencySvc CurrencyConverter
+	userSvc     BaseCurrencyProvider
+	jobs        sync.Map // string → *importJobState
+}
+
+func NewHandler(svc *Service, currencySvc CurrencyConverter, userSvc BaseCurrencyProvider) *Handler {
+	return &Handler{svc: svc, currencySvc: currencySvc, userSvc: userSvc}
 }
 
 func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, auth gin.HandlerFunc) {
-	// /transactions
 	g := rg.Group("/transactions", auth)
 	g.POST("", h.create)
 	g.GET("", h.findAll)
@@ -43,13 +55,40 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, auth gin.HandlerFunc) {
 	g.POST("/import", h.importCsv)
 	g.GET("/import/jobs/:jobId", h.getImportJob)
 
-	// /transfers
 	t := rg.Group("/transfers", auth)
 	t.POST("", h.createTransfer)
 
-	// /accounts/:id/transactions — registered alongside account routes
 	a := rg.Group("/accounts", auth)
 	a.GET("/:id/transactions", h.getByAccount)
+}
+
+func (h *Handler) baseCurrency(userId string) string {
+	if h.userSvc == nil {
+		return "USD"
+	}
+	bc, err := h.userSvc.GetBaseCurrency(userId)
+	if err != nil || bc == "" {
+		return "USD"
+	}
+	return bc
+}
+
+func (h *Handler) toResponse(tx *Transaction, bc string) TransactionResponse {
+	resp := TransactionResponse{Transaction: *tx, BaseCurrency: bc}
+	if h.currencySvc != nil && tx.Account != nil {
+		if converted, err := h.currencySvc.Convert(tx.Amount, tx.Account.Currency, bc); err == nil {
+			resp.BaseAmount = &converted
+		}
+	}
+	return resp
+}
+
+func (h *Handler) toResponseList(txs []Transaction, bc string) []TransactionResponse {
+	out := make([]TransactionResponse, len(txs))
+	for i := range txs {
+		out[i] = h.toResponse(&txs[i], bc)
+	}
+	return out
 }
 
 // @Summary		Create transaction
@@ -58,10 +97,9 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, auth gin.HandlerFunc) {
 // @Accept		json
 // @Produce		json
 // @Param		body body CreateTransactionDto true "Transaction details"
-// @Success		201 {object} Transaction
+// @Success		201 {object} TransactionResponse
 // @Failure		400 {object} common.ErrorResponse
 // @Failure		401 {object} common.ErrorResponse
-// @Failure		404 {object} common.ErrorResponse
 // @Security	BearerAuth
 // @Router		/transactions [post]
 func (h *Handler) create(c *gin.Context) {
@@ -77,7 +115,9 @@ func (h *Handler) create(c *gin.Context) {
 		common.RespondAppError(c, err)
 		return
 	}
-	c.JSON(201, tx)
+
+	bc := h.baseCurrency(claims.Sub)
+	c.JSON(http.StatusCreated, h.toResponse(tx, bc))
 }
 
 // @Summary		List transactions
@@ -85,8 +125,8 @@ func (h *Handler) create(c *gin.Context) {
 // @Tags		transactions
 // @Produce		json
 // @Param		period query string  false "Time period" Enums(day, week, month, quarter, year) default(month)
-// @Param		offset query integer false "Period offset (negative = past)"                  default(0)
-// @Success		200 {array} Transaction
+// @Param		offset query integer false "Period offset (negative = past)" default(0)
+// @Success		200 {array} TransactionResponse
 // @Failure		401 {object} common.ErrorResponse
 // @Security	BearerAuth
 // @Router		/transactions [get]
@@ -99,7 +139,9 @@ func (h *Handler) findAll(c *gin.Context) {
 		common.RespondInternalError(c)
 		return
 	}
-	c.JSON(200, txs)
+
+	bc := h.baseCurrency(claims.Sub)
+	c.JSON(200, h.toResponseList(txs, bc))
 }
 
 // @Summary		Get transaction
@@ -107,7 +149,7 @@ func (h *Handler) findAll(c *gin.Context) {
 // @Tags		transactions
 // @Produce		json
 // @Param		id path string true "Transaction ID"
-// @Success		200 {object} Transaction
+// @Success		200 {object} TransactionResponse
 // @Failure		401 {object} common.ErrorResponse
 // @Failure		404 {object} common.ErrorResponse
 // @Security	BearerAuth
@@ -120,7 +162,9 @@ func (h *Handler) findOne(c *gin.Context) {
 		common.RespondAppError(c, err)
 		return
 	}
-	c.JSON(200, tx)
+
+	bc := h.baseCurrency(claims.Sub)
+	c.JSON(200, h.toResponse(tx, bc))
 }
 
 // @Summary		Update transaction
@@ -130,7 +174,7 @@ func (h *Handler) findOne(c *gin.Context) {
 // @Produce		json
 // @Param		id   path string               true "Transaction ID"
 // @Param		body body UpdateTransactionDto true "Fields to update"
-// @Success		200 {object} Transaction
+// @Success		200 {object} TransactionResponse
 // @Failure		400 {object} common.ErrorResponse
 // @Failure		401 {object} common.ErrorResponse
 // @Failure		404 {object} common.ErrorResponse
@@ -149,7 +193,9 @@ func (h *Handler) update(c *gin.Context) {
 		common.RespondAppError(c, err)
 		return
 	}
-	c.JSON(200, tx)
+
+	bc := h.baseCurrency(claims.Sub)
+	c.JSON(200, h.toResponse(tx, bc))
 }
 
 // @Summary		Delete transaction
@@ -178,8 +224,8 @@ func (h *Handler) remove(c *gin.Context) {
 // @Produce		json
 // @Param		id     path  string  true  "Account ID"
 // @Param		period query string  false "Time period" Enums(day, week, month, quarter, year) default(month)
-// @Param		offset query integer false "Period offset (negative = past)"                  default(0)
-// @Success		200 {array} Transaction
+// @Param		offset query integer false "Period offset (negative = past)" default(0)
+// @Success		200 {array} TransactionResponse
 // @Failure		401 {object} common.ErrorResponse
 // @Failure		404 {object} common.ErrorResponse
 // @Security	BearerAuth
@@ -193,11 +239,13 @@ func (h *Handler) getByAccount(c *gin.Context) {
 		common.RespondAppError(c, err)
 		return
 	}
-	c.JSON(200, txs)
+
+	bc := h.baseCurrency(claims.Sub)
+	c.JSON(200, h.toResponseList(txs, bc))
 }
 
 // @Summary		Create transfer
-// @Description	Transfer funds between two accounts (creates paired expense + income transactions)
+// @Description	Transfer funds between two accounts. For cross-currency transfers, destinationAmount must be provided (the actual amount credited to the destination account in its currency).
 // @Tags		transfers
 // @Accept		json
 // @Produce		json
@@ -221,11 +269,11 @@ func (h *Handler) createTransfer(c *gin.Context) {
 		common.RespondAppError(c, err)
 		return
 	}
-	c.JSON(201, result)
+	c.JSON(http.StatusCreated, result)
 }
 
 // @Summary		Validate CSV before import
-// @Description	Parse a CSV file and return all issues (unknown accounts, unknown categories, row errors) without importing anything. Optionally supply categoryMapping to pre-resolve unknown categories.
+// @Description	Parse a CSV file and return all issues without importing anything.
 // @Tags		transactions
 // @Accept		multipart/form-data
 // @Produce		json
@@ -253,7 +301,7 @@ func (h *Handler) validateImportCsv(c *gin.Context) {
 }
 
 // @Summary		Import transactions from CSV (async)
-// @Description	Start a background import job from a CSV file. Poll GET /transactions/import/jobs/{jobId} for status. Optionally supply categoryMapping to resolve unknown category names.
+// @Description	Start a background import job from a CSV file. Poll GET /transactions/import/jobs/{jobId} for status.
 // @Tags		transactions
 // @Accept		multipart/form-data
 // @Produce		json
@@ -298,7 +346,7 @@ func (h *Handler) importCsv(c *gin.Context) {
 }
 
 // @Summary		Get import job status
-// @Description	Poll the status of a background CSV import job. Status is one of: pending, running, done, failed.
+// @Description	Poll the status of a background CSV import job.
 // @Tags		transactions
 // @Produce		json
 // @Param		jobId path string true "Job ID returned by POST /transactions/import"
@@ -326,8 +374,6 @@ func (h *Handler) getImportJob(c *gin.Context) {
 	})
 }
 
-// readCsvForm reads the CSV file and optional categoryMapping from a multipart form.
-// Returns false and writes the error response itself on failure.
 func readCsvForm(c *gin.Context) ([]byte, map[string]string, bool) {
 	file, err := c.FormFile("file")
 	if err != nil {

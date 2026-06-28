@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -13,6 +14,7 @@ type Config struct {
 	Port     int
 	Database DatabaseConfig
 	JWT      JWTConfig
+	OXRAppID string
 }
 
 type DatabaseConfig struct {
@@ -75,6 +77,11 @@ func Load() (*Config, error) {
 			Secret:    secret,
 			ExpiresIn: expiresIn,
 		},
+	}
+
+	cfg.OXRAppID = viper.GetString("OXR_APP_ID")
+	if cfg.OXRAppID == "" {
+		log.Println("OXR_APP_ID not set — currency rate fetching disabled")
 	}
 
 	return cfg, nil

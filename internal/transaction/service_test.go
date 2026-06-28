@@ -43,6 +43,14 @@ func seedAccountNamed(t *testing.T, db *gorm.DB, userId, name string) *account.A
 	return a
 }
 
+func seedAccountWithCurrency(t *testing.T, db *gorm.DB, userId, currency string) *account.Account {
+	t.Helper()
+	svc := account.NewService(db)
+	a, err := svc.Create(userId, account.CreateAccountDto{Name: "Account-" + currency, Currency: currency, Balance: 1000})
+	require.NoError(t, err)
+	return a
+}
+
 func seedCategory(t *testing.T, db *gorm.DB, userId string, typ common.TransactionType) *category.Category {
 	t.Helper()
 	svc := category.NewService(db)
@@ -654,6 +662,108 @@ func TestRealDB_Transaction_ValidateCsv_WithMapping(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.Valid)
 	assert.Empty(t, result.UnknownCategories)
+}
+
+func TestRealDB_Transaction_Transfer_CrossCurrency_RequiresDestinationAmount(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	seedDefaultCategories(t, db)
+
+	userId := seedUser(t, db)
+	srcAcc := seedAccountWithCurrency(t, db, userId, "USD")
+	dstAcc := seedAccountWithCurrency(t, db, userId, "EUR")
+
+	_, err := svc.Transfer(CreateTransferDto{
+		SourceAccountId:      srcAcc.ID,
+		DestinationAccountId: dstAcc.ID,
+		Amount:               100,
+		Description:          "USD to EUR without destinationAmount",
+	}, userId)
+
+	require.Error(t, err)
+	var appErr *common.AppError
+	require.True(t, errors.As(err, &appErr))
+	assert.Equal(t, 400, appErr.Code)
+	assert.Contains(t, appErr.Error(), "destinationAmount")
+}
+
+func TestRealDB_Transaction_Transfer_CrossCurrency_WithDestinationAmount(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	seedDefaultCategories(t, db)
+
+	userId := seedUser(t, db)
+	srcAcc := seedAccountWithCurrency(t, db, userId, "USD")
+	dstAcc := seedAccountWithCurrency(t, db, userId, "EUR")
+
+	destAmount := 92.50
+	result, err := svc.Transfer(CreateTransferDto{
+		SourceAccountId:      srcAcc.ID,
+		DestinationAccountId: dstAcc.ID,
+		Amount:               100,
+		DestinationAmount:    &destAmount,
+		Description:          "USD to EUR",
+	}, userId)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.SourceTransaction)
+	require.NotNil(t, result.DestinationTransaction)
+
+	assert.InDelta(t, -100.0, result.SourceTransaction.Amount, 0.001)
+	assert.InDelta(t, 92.50, result.DestinationTransaction.Amount, 0.001)
+	assert.Equal(t, string(common.TransactionTypeExpense), result.SourceTransaction.Type)
+	assert.Equal(t, string(common.TransactionTypeIncome), result.DestinationTransaction.Type)
+}
+
+func TestRealDB_Transaction_Transfer_SameCurrency_DestinationAmountOptional(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	seedDefaultCategories(t, db)
+
+	userId := seedUser(t, db)
+	srcAcc := seedAccountWithCurrency(t, db, userId, "USD")
+	dstAcc := seedAccountWithCurrency(t, db, userId, "USD")
+
+	// Same currency: destinationAmount is optional — without it, mirrors Amount.
+	result, err := svc.Transfer(CreateTransferDto{
+		SourceAccountId:      srcAcc.ID,
+		DestinationAccountId: dstAcc.ID,
+		Amount:               200,
+		Description:          "Same-currency transfer no destinationAmount",
+	}, userId)
+
+	require.NoError(t, err)
+	assert.InDelta(t, -200.0, result.SourceTransaction.Amount, 0.001)
+	assert.InDelta(t, 200.0, result.DestinationTransaction.Amount, 0.001)
+}
+
+func TestRealDB_Transaction_Transfer_SameCurrency_DestinationAmountOverride(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	seedDefaultCategories(t, db)
+
+	userId := seedUser(t, db)
+	srcAcc := seedAccountWithCurrency(t, db, userId, "USD")
+	dstAcc := seedAccountWithCurrency(t, db, userId, "USD")
+
+	// Same currency but caller explicitly provides destinationAmount — it is respected.
+	destAmount := 150.0
+	result, err := svc.Transfer(CreateTransferDto{
+		SourceAccountId:      srcAcc.ID,
+		DestinationAccountId: dstAcc.ID,
+		Amount:               200,
+		DestinationAmount:    &destAmount,
+		Description:          "Same-currency transfer with explicit destinationAmount",
+	}, userId)
+
+	require.NoError(t, err)
+	assert.InDelta(t, -200.0, result.SourceTransaction.Amount, 0.001)
+	assert.InDelta(t, 150.0, result.DestinationTransaction.Amount, 0.001)
 }
 
 func TestRealDB_Transaction_ImportFromCsv_Duplicate_PartialOverlap(t *testing.T) {
