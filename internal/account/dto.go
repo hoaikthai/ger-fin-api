@@ -13,3 +13,10 @@ type UpdateAccountDto struct {
 	Balance     *float64 `json:"balance"     binding:"omitempty"`
 	Description *string  `json:"description" binding:"omitempty"`
 }
+
+// AccountResponse wraps Account with computed base-currency fields.
+type AccountResponse struct {
+	Account
+	BaseCurrencyBalance *float64 `json:"baseCurrencyBalance,omitempty"`
+	BaseCurrency        string   `json:"baseCurrency"`
+}
