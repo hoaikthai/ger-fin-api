@@ -47,28 +47,43 @@ func (s *Service) FetchAndStoreRates() error {
 		return fmt.Errorf("decode OXR response: %w", err)
 	}
 
-	now := time.Now()
-	rates := make([]ExchangeRate, 0, len(payload.Rates))
-	for target, rate := range payload.Rates {
-		rates = append(rates, ExchangeRate{
-			BaseCurrency:   payload.Base,
-			TargetCurrency: target,
-			Rate:           rate,
-			FetchedAt:      now,
-		})
-	}
-
-	// Soft-delete all existing rates for this base so the unique index stays clean,
-	// then bulk-insert new rates — wrapped in a transaction so a failed create
-	// never leaves the table empty.
 	return s.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where(`"baseCurrency" = ?`, payload.Base).Delete(&ExchangeRate{}).Error; err != nil {
-			return fmt.Errorf("clear old rates: %w", err)
+		// Load existing live rows for this base currency
+		var existing []ExchangeRate
+		if err := tx.Where(`"baseCurrency" = ?`, payload.Base).Find(&existing).Error; err != nil {
+			return fmt.Errorf("load existing rates: %w", err)
 		}
-		if err := tx.Create(&rates).Error; err != nil {
-			return fmt.Errorf("store rates: %w", err)
+		existingMap := make(map[string]*ExchangeRate, len(existing))
+		for i := range existing {
+			existingMap[existing[i].TargetCurrency] = &existing[i]
 		}
-		log.Printf("currency: refreshed %d exchange rates (base: %s)", len(rates), payload.Base)
+
+		now := time.Now()
+		var toCreate []ExchangeRate
+		for target, rate := range payload.Rates {
+			if er, ok := existingMap[target]; ok {
+				er.Rate = rate
+				er.FetchedAt = now
+				if err := tx.Save(er).Error; err != nil {
+					return fmt.Errorf("update rate %s/%s: %w", payload.Base, target, err)
+				}
+			} else {
+				toCreate = append(toCreate, ExchangeRate{
+					BaseCurrency:   payload.Base,
+					TargetCurrency: target,
+					Rate:           rate,
+					FetchedAt:      now,
+				})
+			}
+		}
+		if len(toCreate) > 0 {
+			if err := tx.Create(&toCreate).Error; err != nil {
+				return fmt.Errorf("insert new rates: %w", err)
+			}
+		}
+
+		log.Printf("currency: refreshed %d exchange rates (base: %s, updated: %d, new: %d)",
+			len(payload.Rates), payload.Base, len(existing), len(toCreate))
 		return nil
 	})
 }

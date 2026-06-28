@@ -2,6 +2,7 @@ package report
 
 import (
 	"fmt"
+	"log"
 	"math"
 	"sort"
 	"time"
@@ -75,6 +76,9 @@ func (s *Service) CategoryBreakdown(userId string, from, to time.Time, baseCurre
 		if s.currency != nil {
 			if c, err := s.currency.Convert(r.Total, r.AccountCurrency, baseCurrency); err == nil {
 				converted = c
+			} else {
+				log.Printf("report: CategoryBreakdown skipping row (currency %s): %v", r.AccountCurrency, err)
+				continue // excluded from aggregation — rate unavailable
 			}
 		}
 		catTotals[key] += converted
@@ -152,12 +156,14 @@ func (s *Service) MonthlyTrend(userId string, from, to time.Time, baseCurrency s
 		income := r.Income
 		expense := r.Expense
 		if s.currency != nil {
-			if c, err := s.currency.Convert(r.Income, r.AccountCurrency, baseCurrency); err == nil {
-				income = c
+			incConverted, incErr := s.currency.Convert(r.Income, r.AccountCurrency, baseCurrency)
+			expConverted, expErr := s.currency.Convert(r.Expense, r.AccountCurrency, baseCurrency)
+			if incErr != nil || expErr != nil {
+				log.Printf("report: MonthlyTrend skipping month %s row (currency %s): income_err=%v expense_err=%v", r.Month, r.AccountCurrency, incErr, expErr)
+				continue // excluded — rate unavailable
 			}
-			if c, err := s.currency.Convert(r.Expense, r.AccountCurrency, baseCurrency); err == nil {
-				expense = c
-			}
+			income = incConverted
+			expense = expConverted
 		}
 		prev := rowMap[r.Month]
 		rowMap[r.Month] = MonthRow{
@@ -212,7 +218,8 @@ func (s *Service) NetWorth(userId string, baseCurrency string) (*NetWorthRespons
 				nwa.BaseCurrencyBalance = &converted
 				resp.Total += converted
 			} else {
-				resp.Total += a.Balance // fallback: add raw balance
+				log.Printf("report: NetWorth skipping account %s (currency %s): %v", a.ID, a.Currency, err)
+				// excluded from total — rate unavailable
 			}
 		} else {
 			resp.Total += a.Balance
