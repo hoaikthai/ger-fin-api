@@ -16,6 +16,13 @@ const (
 	RecurrenceFrequencyYearly  RecurrenceFrequency = "yearly"
 )
 
+type BudgetPeriod string
+
+const (
+	BudgetPeriodMonthly BudgetPeriod = "monthly"
+	BudgetPeriodYearly  BudgetPeriod = "yearly"
+)
+
 type TimePeriod string
 
 const (
