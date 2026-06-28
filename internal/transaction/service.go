@@ -129,6 +129,7 @@ func (s *Service) Create(dto CreateTransactionDto, userId string) (*Transaction,
 	if err := s.db.Create(tx).Error; err != nil {
 		return nil, err
 	}
+	tx.Account = &acc
 	return tx, nil
 }
 
