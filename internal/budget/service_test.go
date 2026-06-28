@@ -97,4 +97,11 @@ func TestRealDB_Budget_TableRoundTrip(t *testing.T) {
 	assert.Equal(t, 500.0, got.Amount)
 	assert.Equal(t, "USD", got.Currency)
 	assert.True(t, got.Rollover)
+	assert.Equal(t, "2026-06-01", got.PeriodStart.Format("2006-01-02"))
+	assert.Equal(t, "2026-06-30", got.PeriodEnd.Format("2006-01-02"))
+	assert.Equal(t, string(common.BudgetPeriodMonthly), got.PeriodType)
+	assert.Equal(t, b.SeriesId, got.SeriesId)
+	assert.Equal(t, b.CategoryId, got.CategoryId)
+	assert.True(t, got.IsActive)
+	assert.Equal(t, 0.0, got.CarriedOver)
 }
