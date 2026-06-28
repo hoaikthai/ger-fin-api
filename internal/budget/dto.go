@@ -37,7 +37,7 @@ type BudgetDetailResponse struct {
 // periodBounds returns the inclusive [start, end] calendar dates (UTC midnight)
 // of the period containing ref.
 func periodBounds(periodType string, ref time.Time) (time.Time, time.Time) {
-	y, m, _ := ref.Date()
+	y, m, _ := ref.UTC().Date()
 	if periodType == string(common.BudgetPeriodYearly) {
 		start := time.Date(y, 1, 1, 0, 0, 0, 0, time.UTC)
 		end := time.Date(y, 12, 31, 0, 0, 0, 0, time.UTC)
