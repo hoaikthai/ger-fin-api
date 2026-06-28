@@ -3,6 +3,7 @@ package report
 import (
 	"fmt"
 	"math"
+	"sort"
 	"time"
 
 	"ger_fin_api/internal/account"
@@ -112,6 +113,8 @@ func (s *Service) CategoryBreakdown(userId string, from, to time.Time, baseCurre
 			resp.Expense = append(resp.Expense, row)
 		}
 	}
+	sort.Slice(resp.Income, func(i, j int) bool { return resp.Income[i].Total > resp.Income[j].Total })
+	sort.Slice(resp.Expense, func(i, j int) bool { return math.Abs(resp.Expense[i].Total) > math.Abs(resp.Expense[j].Total) })
 	return resp, nil
 }
 

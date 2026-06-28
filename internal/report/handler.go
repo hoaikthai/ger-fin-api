@@ -95,7 +95,7 @@ func (h *Handler) categoryBreakdown(c *gin.Context) {
 // @Produce		json
 // @Param		from query string false "Start date (YYYY-MM-DD), defaults to first of current month"
 // @Param		to   query string false "End date   (YYYY-MM-DD), defaults to today"
-// @Success		200 {array}  MonthRow
+// @Success		200 {object} MonthlyTrendResponse
 // @Failure		400 {object} common.ErrorResponse
 // @Failure		401 {object} common.ErrorResponse
 // @Security	BearerAuth
