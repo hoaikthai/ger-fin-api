@@ -115,13 +115,15 @@ func (s *Service) Create(dto CreateTransactionDto, userId string) (*Transaction,
 	}
 
 	tx := &Transaction{
-		Type:            string(dto.Type),
-		Amount:          dto.Amount,
-		Description:     dto.Description,
-		CategoryId:      dto.CategoryId,
-		UserId:          userId,
-		AccountId:       dto.AccountId,
-		TransactionDate: txDate,
+		Type:             string(dto.Type),
+		Amount:           dto.Amount,
+		Description:      dto.Description,
+		CategoryId:       dto.CategoryId,
+		UserId:           userId,
+		AccountId:        dto.AccountId,
+		TransactionDate:  txDate,
+		OriginalCurrency: dto.OriginalCurrency,
+		OriginalAmount:   dto.OriginalAmount,
 	}
 
 	if err := s.db.Create(tx).Error; err != nil {
@@ -210,6 +212,12 @@ func (s *Service) Update(id string, dto UpdateTransactionDto, userId string) (*T
 	}
 	if dto.TransactionDate != nil {
 		tx.TransactionDate = *dto.TransactionDate
+	}
+	if dto.OriginalCurrency != nil {
+		tx.OriginalCurrency = dto.OriginalCurrency
+	}
+	if dto.OriginalAmount != nil {
+		tx.OriginalAmount = dto.OriginalAmount
 	}
 
 	if err := s.db.Save(tx).Error; err != nil {

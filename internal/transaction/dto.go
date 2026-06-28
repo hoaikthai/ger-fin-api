@@ -12,7 +12,9 @@ type CreateTransactionDto struct {
 	Description     string                 `json:"description"     binding:"required"`
 	CategoryId      string                 `json:"categoryId"      binding:"required,uuid"`
 	AccountId       string                 `json:"accountId"       binding:"required,uuid"`
-	TransactionDate *time.Time             `json:"transactionDate" binding:"omitempty"`
+	TransactionDate  *time.Time             `json:"transactionDate"  binding:"omitempty"`
+	OriginalCurrency *string                `json:"originalCurrency" binding:"omitempty,len=3"`
+	OriginalAmount   *float64               `json:"originalAmount"   binding:"omitempty"`
 }
 
 type UpdateTransactionDto struct {
@@ -21,7 +23,9 @@ type UpdateTransactionDto struct {
 	Description     *string                 `json:"description"     binding:"omitempty"`
 	CategoryId      *string                 `json:"categoryId"      binding:"omitempty,uuid"`
 	AccountId       *string                 `json:"accountId"       binding:"omitempty,uuid"`
-	TransactionDate *time.Time              `json:"transactionDate" binding:"omitempty"`
+	TransactionDate  *time.Time              `json:"transactionDate"  binding:"omitempty"`
+	OriginalCurrency *string                 `json:"originalCurrency" binding:"omitempty,len=3"`
+	OriginalAmount   *float64                `json:"originalAmount"   binding:"omitempty"`
 }
 
 type CreateTransferDto struct {
@@ -64,4 +68,11 @@ type ImportJobStatus struct {
 type TransferResult struct {
 	SourceTransaction      *Transaction `json:"sourceTransaction"`
 	DestinationTransaction *Transaction `json:"destinationTransaction"`
+}
+
+// TransactionResponse wraps Transaction with computed currency fields.
+type TransactionResponse struct {
+	Transaction
+	BaseAmount   *float64 `json:"baseAmount,omitempty"`
+	BaseCurrency string   `json:"baseCurrency"`
 }
