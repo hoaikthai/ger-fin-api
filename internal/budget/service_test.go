@@ -73,6 +73,89 @@ func newSvc(db *gorm.DB) *Service {
 	return NewService(db, currency.NewService(db, ""), user.NewService(db))
 }
 
+func TestRealDB_Budget_Create_Category(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	userId := seedUser(t, db)
+	catId := seedExpenseCategory(t, db, userId, "Food")
+	svc := newSvc(db)
+
+	roll := true
+	b, err := svc.Create(CreateBudgetDto{
+		CategoryId: &catId,
+		PeriodType: common.BudgetPeriodMonthly,
+		Amount:     500,
+		Rollover:   &roll,
+	}, userId)
+	require.NoError(t, err)
+	assert.NotEmpty(t, b.SeriesId)
+	assert.Equal(t, "USD", b.Currency) // base currency default
+	assert.Equal(t, string(common.BudgetPeriodMonthly), b.PeriodType)
+	assert.True(t, b.Rollover)
+	assert.Equal(t, 1, b.PeriodStart.Day()) // first of current month
+}
+
+func TestRealDB_Budget_Create_Overall(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	userId := seedUser(t, db)
+	svc := newSvc(db)
+
+	b, err := svc.Create(CreateBudgetDto{
+		PeriodType: common.BudgetPeriodMonthly,
+		Amount:     3000,
+	}, userId)
+	require.NoError(t, err)
+	assert.Nil(t, b.CategoryId)
+	assert.False(t, b.Rollover) // defaults false
+}
+
+func TestRealDB_Budget_Create_RejectsIncomeCategory(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	userId := seedUser(t, db)
+	incomeCat := seedIncomeCategory(t, db, userId)
+	svc := newSvc(db)
+
+	_, err := svc.Create(CreateBudgetDto{
+		CategoryId: &incomeCat,
+		PeriodType: common.BudgetPeriodMonthly,
+		Amount:     100,
+	}, userId)
+	var appErr *common.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, 400, appErr.Code)
+}
+
+func TestRealDB_Budget_Create_RejectsForeignCategory(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	owner := seedUser(t, db)
+	intruder := seedUser(t, db)
+	catId := seedExpenseCategory(t, db, owner, "Food")
+	svc := newSvc(db)
+
+	_, err := svc.Create(CreateBudgetDto{
+		CategoryId: &catId,
+		PeriodType: common.BudgetPeriodMonthly,
+		Amount:     100,
+	}, intruder)
+	var appErr *common.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, 403, appErr.Code)
+}
+
+func TestRealDB_Budget_Create_RejectsDuplicate(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	userId := seedUser(t, db)
+	catId := seedExpenseCategory(t, db, userId, "Food")
+	svc := newSvc(db)
+
+	_, err := svc.Create(CreateBudgetDto{CategoryId: &catId, PeriodType: common.BudgetPeriodMonthly, Amount: 500}, userId)
+	require.NoError(t, err)
+
+	_, err = svc.Create(CreateBudgetDto{CategoryId: &catId, PeriodType: common.BudgetPeriodMonthly, Amount: 600}, userId)
+	var appErr *common.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, 409, appErr.Code)
+}
+
 func TestRealDB_Budget_TableRoundTrip(t *testing.T) {
 	db := testutil.NewRealDB(t)
 	userId := seedUser(t, db)
