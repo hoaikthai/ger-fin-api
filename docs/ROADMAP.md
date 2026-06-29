@@ -61,15 +61,15 @@
 
 ---
 
-## Phase 3 — Budget Planning
+## Phase 3 — Budget Planning ✅
 
 > Set spending limits and track progress against them.
 
-- [ ] **Budget model** — amount cap per category per period (monthly default)
-- [ ] **Budget CRUD** (`POST/GET/PATCH/DELETE /budgets`)
-- [ ] **Budget progress** — actual spend vs budget cap, percent used
-- [ ] **Over-budget alert flag** — API response field indicating exceeded budget
-- [ ] **Budget rollover** — optionally carry unspent budget to next period
+- [x] **Budget model** — amount cap per category per period (monthly default)
+- [x] **Budget CRUD** (`POST/GET/PATCH/DELETE /budgets`)
+- [x] **Budget progress** — actual spend vs budget cap, percent used
+- [x] **Over-budget alert flag** — API response field indicating exceeded budget
+- [x] **Budget rollover** — optionally carry unspent budget to next period
 
 ---
 
@@ -183,7 +183,7 @@
 | 1 — Core Foundation | ✅ Done | All CRUD, scheduler, tests |
 | 2 — Reporting & Analytics | ✅ Done | All 7 reports complete |
 | 2.5 — User Preferences & Settings | ✅ Done | Settings CRUD, reporting defaults wired in |
-| 3 — Budget Planning | 🔲 Planned | New domain |
+| 3 — Budget Planning | ✅ Done | Per-category & overall caps, monthly/yearly, rollover, cron catch-up |
 | 4 — Financial Goals | 🔲 Planned | New domain |
 | 5 — Multi-Currency | ✅ Done | OXR rate fetch, base currency normalization on accounts, transactions, and reports; cross-currency transfers |
 | 6 — Import / Export | 🟡 Partial | CSV export + import done; Excel pending |
