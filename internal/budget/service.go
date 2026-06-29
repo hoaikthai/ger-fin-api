@@ -223,3 +223,45 @@ func (s *Service) FindOne(id, userId string) (*BudgetDetailResponse, error) {
 	}
 	return &BudgetDetailResponse{Budget: *b, Progress: prog}, nil
 }
+
+// FindAll returns active current-period instances: monthly budgets whose period
+// starts at monthStart, plus yearly budgets whose period starts at yearStart.
+func (s *Service) FindAll(userId string, monthStart, yearStart time.Time) ([]Budget, error) {
+	var budgets []Budget
+	err := s.db.Preload("Category").
+		Where(`"userId" = ? AND "isActive" = ?`, userId, true).
+		Where(`("periodType" = ? AND "periodStart" = ?) OR ("periodType" = ? AND "periodStart" = ?)`,
+			string(common.BudgetPeriodMonthly), monthStart,
+			string(common.BudgetPeriodYearly), yearStart).
+		Order(`"createdAt" DESC`).
+		Find(&budgets).Error
+	return budgets, err
+}
+
+func (s *Service) Update(id string, dto UpdateBudgetDto, userId string) (*Budget, error) {
+	b, err := s.findOneRaw(id, userId)
+	if err != nil {
+		return nil, err
+	}
+	if dto.Amount != nil {
+		b.Amount = *dto.Amount
+	}
+	if dto.Rollover != nil {
+		b.Rollover = *dto.Rollover
+	}
+	if dto.IsActive != nil {
+		b.IsActive = *dto.IsActive
+	}
+	if err := s.db.Save(b).Error; err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+func (s *Service) Remove(id, userId string) error {
+	b, err := s.findOneRaw(id, userId)
+	if err != nil {
+		return err
+	}
+	return s.db.Delete(b).Error
+}

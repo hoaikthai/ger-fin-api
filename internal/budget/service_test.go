@@ -267,6 +267,61 @@ func TestRealDB_Budget_FindOne_NotFoundForOtherUser(t *testing.T) {
 	assert.Equal(t, 404, appErr.Code)
 }
 
+func TestRealDB_Budget_FindAll_CurrentPeriod(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	userId := seedUser(t, db)
+	food := seedExpenseCategory(t, db, userId, "Food")
+	travel := seedExpenseCategory(t, db, userId, "Travel")
+	svc := newSvc(db)
+
+	_, err := svc.Create(CreateBudgetDto{CategoryId: &food, PeriodType: common.BudgetPeriodMonthly, Amount: 500}, userId)
+	require.NoError(t, err)
+	_, err = svc.Create(CreateBudgetDto{CategoryId: &travel, PeriodType: common.BudgetPeriodYearly, Amount: 5000}, userId)
+	require.NoError(t, err)
+
+	now := time.Now().UTC()
+	mStart, _ := periodBounds(string(common.BudgetPeriodMonthly), now)
+	yStart, _ := periodBounds(string(common.BudgetPeriodYearly), now)
+
+	list, err := svc.FindAll(userId, mStart, yStart)
+	require.NoError(t, err)
+	assert.Len(t, list, 2) // both current monthly + current yearly
+}
+
+func TestRealDB_Budget_Update_Fields(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	userId := seedUser(t, db)
+	cat := seedExpenseCategory(t, db, userId, "Food")
+	svc := newSvc(db)
+
+	b, err := svc.Create(CreateBudgetDto{CategoryId: &cat, PeriodType: common.BudgetPeriodMonthly, Amount: 500}, userId)
+	require.NoError(t, err)
+
+	newAmt := 700.0
+	active := false
+	updated, err := svc.Update(b.ID, UpdateBudgetDto{Amount: &newAmt, IsActive: &active}, userId)
+	require.NoError(t, err)
+	assert.Equal(t, 700.0, updated.Amount)
+	assert.False(t, updated.IsActive)
+}
+
+func TestRealDB_Budget_Remove_SoftDeletes(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	userId := seedUser(t, db)
+	cat := seedExpenseCategory(t, db, userId, "Food")
+	svc := newSvc(db)
+
+	b, err := svc.Create(CreateBudgetDto{CategoryId: &cat, PeriodType: common.BudgetPeriodMonthly, Amount: 500}, userId)
+	require.NoError(t, err)
+
+	require.NoError(t, svc.Remove(b.ID, userId))
+
+	_, err = svc.FindOne(b.ID, userId)
+	var appErr *common.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, 404, appErr.Code)
+}
+
 func TestRealDB_Budget_TableRoundTrip(t *testing.T) {
 	db := testutil.NewRealDB(t)
 	userId := seedUser(t, db)
