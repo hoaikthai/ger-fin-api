@@ -279,6 +279,7 @@ func (s *Service) ProcessDueBudgetRollovers() error {
 			SELECT 1 FROM "budget" b2
 			WHERE b2."seriesId" = b."seriesId"
 			  AND b2."deletedAt" IS NULL
+			  AND b2."isActive" = true
 			  AND b2."periodStart" > b."periodStart"
 		  )
 	`).Scan(&tails).Error
@@ -314,7 +315,10 @@ func (s *Service) rollSeriesForward(tail Budget, now time.Time) error {
 		currency := cur.Currency
 
 		// If base currency changed, restate the whole instance in the new currency.
-		base, _ := s.settings.GetBaseCurrency(cur.UserId)
+		base, settingsErr := s.settings.GetBaseCurrency(cur.UserId)
+		if settingsErr != nil {
+			log.Printf("budget: series %s keeping currency %s (settings lookup failed: %v)", cur.SeriesId, cur.Currency, settingsErr)
+		}
 		if base != "" && base != cur.Currency && s.conv != nil {
 			convAmount, aErr := s.conv.Convert(amount, cur.Currency, base)
 			convCarried := 0.0

@@ -440,6 +440,108 @@ func TestRealDB_Budget_Rollover_InactiveSkipped(t *testing.T) {
 	assert.Equal(t, int64(1), count) // paused series does not roll forward
 }
 
+func TestRealDB_Budget_Rollover_MultiPeriodCatchUp(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	userId := seedUser(t, db)
+	cat := seedExpenseCategory(t, db, userId, "Food")
+	svc := newSvc(db)
+
+	twoMonthsAgo := time.Now().UTC().AddDate(0, -2, 0)
+	start, end := periodBounds(string(common.BudgetPeriodMonthly), twoMonthsAgo)
+	tail := Budget{
+		SeriesId:    uuid.New().String(),
+		CategoryId:  &cat,
+		UserId:      userId,
+		PeriodType:  string(common.BudgetPeriodMonthly),
+		PeriodStart: start,
+		PeriodEnd:   end,
+		Amount:      500,
+		Currency:    "USD",
+		Rollover:    false,
+		IsActive:    true,
+	}
+	require.NoError(t, db.Create(&tail).Error)
+
+	require.NoError(t, svc.ProcessDueBudgetRollovers())
+
+	var count int64
+	require.NoError(t, db.Model(&Budget{}).Where(`"seriesId" = ?`, tail.SeriesId).Count(&count).Error)
+	assert.Equal(t, int64(3), count) // two-months-ago + last month + current
+
+	curStart, _ := periodBounds(string(common.BudgetPeriodMonthly), time.Now().UTC())
+	var current Budget
+	require.NoError(t, db.Where(`"seriesId" = ? AND "periodStart" = ?`, tail.SeriesId, curStart).First(&current).Error)
+	assert.Equal(t, 500.0, current.Amount)
+}
+
+func TestRealDB_Budget_Rollover_CurrencyRestatement(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	userId := seedUser(t, db)
+	cat := seedExpenseCategory(t, db, userId, "Food")
+	svc := newSvc(db)
+
+	// Set user base currency to EUR
+	eurStr := "EUR"
+	_, err := user.NewService(db).UpdateSettings(userId, user.UpdateSettingsDto{BaseCurrency: &eurStr})
+	require.NoError(t, err)
+
+	// Seed USD→EUR exchange rate (rate=0.92, so 500 USD → 460 EUR)
+	rate := 0.92
+	require.NoError(t, db.Create(&currency.ExchangeRate{
+		BaseCurrency:   "USD",
+		TargetCurrency: "EUR",
+		Rate:           rate,
+		FetchedAt:      time.Now().UTC(),
+	}).Error)
+
+	// Create active tail in last month denominated in USD
+	tail := makeTailInLastMonth(t, db, userId, &cat, 500, 0, false)
+
+	require.NoError(t, svc.ProcessDueBudgetRollovers())
+
+	curStart, _ := periodBounds(string(common.BudgetPeriodMonthly), time.Now().UTC())
+	var current Budget
+	require.NoError(t, db.Where(`"seriesId" = ? AND "periodStart" = ?`, tail.SeriesId, curStart).First(&current).Error)
+	assert.Equal(t, "EUR", current.Currency)
+	assert.InDelta(t, 500*rate, current.Amount, 0.01)
+}
+
+func TestRealDB_Budget_Rollover_InactiveFutureDoesNotShadowTail(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	userId := seedUser(t, db)
+	cat := seedExpenseCategory(t, db, userId, "Food")
+	svc := newSvc(db)
+
+	tail := makeTailInLastMonth(t, db, userId, &cat, 500, 0, false) // active, last month
+	// An inactive future instance in the same series must not block rolling the active tail.
+	nextStart := nextPeriodStart(string(common.BudgetPeriodMonthly), tail.PeriodStart)
+	futureStart := nextPeriodStart(string(common.BudgetPeriodMonthly), nextStart) // two ahead of tail
+	fs, fe := periodBounds(string(common.BudgetPeriodMonthly), futureStart)
+	inactiveFuture := Budget{
+		SeriesId:    tail.SeriesId,
+		CategoryId:  &cat,
+		UserId:      userId,
+		PeriodType:  string(common.BudgetPeriodMonthly),
+		PeriodStart: fs,
+		PeriodEnd:   fe,
+		Amount:      500,
+		Currency:    "USD",
+		Rollover:    false,
+		IsActive:    true, // will be explicitly set to false below (GORM skips zero-value bool on Create)
+	}
+	require.NoError(t, db.Create(&inactiveFuture).Error)
+	// GORM omits false (zero value for bool) when the column has default:true; use Update to force it.
+	require.NoError(t, db.Model(&Budget{}).Where(`"id" = ?`, inactiveFuture.ID).Update("isActive", false).Error)
+
+	require.NoError(t, svc.ProcessDueBudgetRollovers())
+
+	curStart, _ := periodBounds(string(common.BudgetPeriodMonthly), time.Now().UTC())
+	var current Budget
+	err := db.Where(`"seriesId" = ? AND "periodStart" = ?`, tail.SeriesId, curStart).First(&current).Error
+	require.NoError(t, err) // active tail rolled forward despite the inactive future row
+	assert.True(t, current.IsActive)
+}
+
 func TestRealDB_Budget_TableRoundTrip(t *testing.T) {
 	db := testutil.NewRealDB(t)
 	userId := seedUser(t, db)
