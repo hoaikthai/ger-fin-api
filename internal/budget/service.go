@@ -1,10 +1,11 @@
 package budget
 
 import (
-	"strings"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 
 	"ger_fin_api/internal/common"
@@ -41,7 +42,10 @@ func (s *Service) Create(dto CreateBudgetDto, userId string) (*Budget, error) {
 		return nil, err
 	}
 
-	baseCurrency, _ := s.settings.GetBaseCurrency(userId) // defaults to "USD" on error
+	baseCurrency, err := s.settings.GetBaseCurrency(userId)
+	if err != nil || baseCurrency == "" {
+		baseCurrency = "USD"
+	}
 
 	rollover := false
 	if dto.Rollover != nil {
@@ -115,8 +119,10 @@ func (s *Service) assertNoConflict(userId string, categoryId *string, periodType
 	return nil
 }
 
-// isUniqueViolation reports whether err is a Postgres unique-constraint error
-// (backstop for the partial unique indexes when two requests race).
+// isUniqueViolation reports whether err is a Postgres unique-constraint
+// violation (SQLState 23505) — a backstop for the partial unique indexes
+// when two requests race.
 func isUniqueViolation(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "duplicate key value")
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }

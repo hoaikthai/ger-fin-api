@@ -141,6 +141,22 @@ func TestRealDB_Budget_Create_RejectsForeignCategory(t *testing.T) {
 	assert.Equal(t, 403, appErr.Code)
 }
 
+func TestRealDB_Budget_Create_RejectsNonExistentCategory(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	userId := seedUser(t, db)
+	svc := newSvc(db)
+	ghost := uuid.New().String()
+
+	_, err := svc.Create(CreateBudgetDto{
+		CategoryId: &ghost,
+		PeriodType: common.BudgetPeriodMonthly,
+		Amount:     100,
+	}, userId)
+	var appErr *common.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, 404, appErr.Code)
+}
+
 func TestRealDB_Budget_Create_RejectsDuplicate(t *testing.T) {
 	db := testutil.NewRealDB(t)
 	userId := seedUser(t, db)
