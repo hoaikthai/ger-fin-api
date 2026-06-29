@@ -283,6 +283,12 @@ func TestRealDB_Budget_FindAll_CurrentPeriod(t *testing.T) {
 	mStart, _ := periodBounds(string(common.BudgetPeriodMonthly), now)
 	yStart, _ := periodBounds(string(common.BudgetPeriodYearly), now)
 
+	// Another user's budget in the same period must NOT appear in this user's list.
+	intruder := seedUser(t, db)
+	intruderCat := seedExpenseCategory(t, db, intruder, "Other")
+	_, err = svc.Create(CreateBudgetDto{CategoryId: &intruderCat, PeriodType: common.BudgetPeriodYearly, Amount: 9999}, intruder)
+	require.NoError(t, err)
+
 	list, err := svc.FindAll(userId, mStart, yStart)
 	require.NoError(t, err)
 	assert.Len(t, list, 2) // both current monthly + current yearly
@@ -303,6 +309,7 @@ func TestRealDB_Budget_Update_Fields(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 700.0, updated.Amount)
 	assert.False(t, updated.IsActive)
+	assert.False(t, updated.Rollover) // unset field must remain default, not clobbered
 }
 
 func TestRealDB_Budget_Remove_SoftDeletes(t *testing.T) {
