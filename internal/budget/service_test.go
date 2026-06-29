@@ -172,6 +172,83 @@ func TestRealDB_Budget_Create_RejectsDuplicate(t *testing.T) {
 	assert.Equal(t, 409, appErr.Code)
 }
 
+func TestRealDB_Budget_Progress_RollsUpChildren(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	userId := seedUser(t, db)
+	acct := seedAccount(t, db, userId, "USD")
+	parent := seedExpenseCategory(t, db, userId, "Food")
+	child := seedChildCategory(t, db, userId, "Groceries", parent)
+	svc := newSvc(db)
+
+	now := time.Now().UTC()
+	seedExpense(t, db, userId, acct, parent, 100, now) // on parent
+	seedExpense(t, db, userId, acct, child, 50, now)   // on child
+
+	b, err := svc.Create(CreateBudgetDto{CategoryId: &parent, PeriodType: common.BudgetPeriodMonthly, Amount: 500}, userId)
+	require.NoError(t, err)
+
+	detail, err := svc.FindOne(b.ID, userId)
+	require.NoError(t, err)
+	assert.InDelta(t, 150.0, detail.Progress.Spent, 0.001) // parent + child rolled up
+	assert.InDelta(t, 350.0, detail.Progress.Remaining, 0.001)
+	assert.InDelta(t, 30.0, detail.Progress.PercentUsed, 0.01)
+	assert.False(t, detail.Progress.IsOverBudget)
+}
+
+func TestRealDB_Budget_Progress_OverBudget(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	userId := seedUser(t, db)
+	acct := seedAccount(t, db, userId, "USD")
+	cat := seedExpenseCategory(t, db, userId, "Food")
+	svc := newSvc(db)
+
+	seedExpense(t, db, userId, acct, cat, 560, time.Now().UTC())
+	b, err := svc.Create(CreateBudgetDto{CategoryId: &cat, PeriodType: common.BudgetPeriodMonthly, Amount: 500}, userId)
+	require.NoError(t, err)
+
+	detail, err := svc.FindOne(b.ID, userId)
+	require.NoError(t, err)
+	assert.InDelta(t, 560.0, detail.Progress.Spent, 0.001)
+	assert.InDelta(t, -60.0, detail.Progress.Remaining, 0.001)
+	assert.True(t, detail.Progress.IsOverBudget)
+}
+
+func TestRealDB_Budget_Progress_Overall(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	userId := seedUser(t, db)
+	acct := seedAccount(t, db, userId, "USD")
+	food := seedExpenseCategory(t, db, userId, "Food")
+	travel := seedExpenseCategory(t, db, userId, "Travel")
+	svc := newSvc(db)
+
+	now := time.Now().UTC()
+	seedExpense(t, db, userId, acct, food, 200, now)
+	seedExpense(t, db, userId, acct, travel, 300, now)
+
+	b, err := svc.Create(CreateBudgetDto{PeriodType: common.BudgetPeriodMonthly, Amount: 1000}, userId)
+	require.NoError(t, err)
+
+	detail, err := svc.FindOne(b.ID, userId)
+	require.NoError(t, err)
+	assert.InDelta(t, 500.0, detail.Progress.Spent, 0.001) // all expenses
+}
+
+func TestRealDB_Budget_FindOne_NotFoundForOtherUser(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	owner := seedUser(t, db)
+	intruder := seedUser(t, db)
+	cat := seedExpenseCategory(t, db, owner, "Food")
+	svc := newSvc(db)
+
+	b, err := svc.Create(CreateBudgetDto{CategoryId: &cat, PeriodType: common.BudgetPeriodMonthly, Amount: 500}, owner)
+	require.NoError(t, err)
+
+	_, err = svc.FindOne(b.ID, intruder)
+	var appErr *common.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, 404, appErr.Code)
+}
+
 func TestRealDB_Budget_TableRoundTrip(t *testing.T) {
 	db := testutil.NewRealDB(t)
 	userId := seedUser(t, db)
