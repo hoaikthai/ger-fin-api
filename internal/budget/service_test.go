@@ -211,6 +211,24 @@ func TestRealDB_Budget_Progress_OverBudget(t *testing.T) {
 	assert.InDelta(t, 560.0, detail.Progress.Spent, 0.001)
 	assert.InDelta(t, -60.0, detail.Progress.Remaining, 0.001)
 	assert.True(t, detail.Progress.IsOverBudget)
+	assert.InDelta(t, 112.0, detail.Progress.PercentUsed, 0.01) // 560/500
+}
+
+func TestRealDB_Budget_Progress_ExcludesUnavailableRate(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	userId := seedUser(t, db)
+	eurAcct := seedAccount(t, db, userId, "EUR")
+	cat := seedExpenseCategory(t, db, userId, "Food")
+	svc := newSvc(db)
+
+	// Budget snapshots base currency USD; account is EUR; no EUR/USD rate is seeded.
+	seedExpense(t, db, userId, eurAcct, cat, 100, time.Now().UTC())
+	b, err := svc.Create(CreateBudgetDto{CategoryId: &cat, PeriodType: common.BudgetPeriodMonthly, Amount: 500}, userId)
+	require.NoError(t, err)
+
+	detail, err := svc.FindOne(b.ID, userId)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.0, detail.Progress.Spent, 0.001) // EUR->USD rate unavailable -> row excluded from spend
 }
 
 func TestRealDB_Budget_Progress_Overall(t *testing.T) {
