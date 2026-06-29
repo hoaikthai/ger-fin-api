@@ -329,6 +329,117 @@ func TestRealDB_Budget_Remove_SoftDeletes(t *testing.T) {
 	assert.Equal(t, 404, appErr.Code)
 }
 
+// makeTailInLastMonth inserts an active monthly budget instance whose period is
+// the previous calendar month, so a rollover run must create the current month.
+func makeTailInLastMonth(t *testing.T, db *gorm.DB, userId string, catId *string, amount, carried float64, rollover bool) Budget {
+	t.Helper()
+	lastMonthRef := time.Now().UTC().AddDate(0, -1, 0)
+	start, end := periodBounds(string(common.BudgetPeriodMonthly), lastMonthRef)
+	b := Budget{
+		SeriesId:    uuid.New().String(),
+		CategoryId:  catId,
+		UserId:      userId,
+		PeriodType:  string(common.BudgetPeriodMonthly),
+		PeriodStart: start,
+		PeriodEnd:   end,
+		Amount:      amount,
+		Currency:    "USD",
+		CarriedOver: carried,
+		Rollover:    rollover,
+		IsActive:    true,
+	}
+	require.NoError(t, db.Create(&b).Error)
+	return b
+}
+
+func TestRealDB_Budget_Rollover_CarriesUnspent(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	userId := seedUser(t, db)
+	acct := seedAccount(t, db, userId, "USD")
+	cat := seedExpenseCategory(t, db, userId, "Food")
+	svc := newSvc(db)
+
+	tail := makeTailInLastMonth(t, db, userId, &cat, 500, 0, true)
+	// spend 420 last month -> 80 should carry forward
+	seedExpense(t, db, userId, acct, cat, 420, tail.PeriodStart.AddDate(0, 0, 5))
+
+	require.NoError(t, svc.ProcessDueBudgetRollovers())
+
+	curStart, _ := periodBounds(string(common.BudgetPeriodMonthly), time.Now().UTC())
+	var next Budget
+	require.NoError(t, db.Where(`"seriesId" = ? AND "periodStart" = ?`, tail.SeriesId, curStart).First(&next).Error)
+	assert.InDelta(t, 80.0, next.CarriedOver, 0.001)
+	assert.InDelta(t, 500.0, next.Amount, 0.001)
+}
+
+func TestRealDB_Budget_Rollover_OverspendClampsToZero(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	userId := seedUser(t, db)
+	acct := seedAccount(t, db, userId, "USD")
+	cat := seedExpenseCategory(t, db, userId, "Food")
+	svc := newSvc(db)
+
+	tail := makeTailInLastMonth(t, db, userId, &cat, 500, 0, true)
+	seedExpense(t, db, userId, acct, cat, 560, tail.PeriodStart.AddDate(0, 0, 5))
+
+	require.NoError(t, svc.ProcessDueBudgetRollovers())
+
+	curStart, _ := periodBounds(string(common.BudgetPeriodMonthly), time.Now().UTC())
+	var next Budget
+	require.NoError(t, db.Where(`"seriesId" = ? AND "periodStart" = ?`, tail.SeriesId, curStart).First(&next).Error)
+	assert.InDelta(t, 0.0, next.CarriedOver, 0.001)
+}
+
+func TestRealDB_Budget_Rollover_Disabled_NoCarry(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	userId := seedUser(t, db)
+	acct := seedAccount(t, db, userId, "USD")
+	cat := seedExpenseCategory(t, db, userId, "Food")
+	svc := newSvc(db)
+
+	tail := makeTailInLastMonth(t, db, userId, &cat, 500, 0, false)
+	seedExpense(t, db, userId, acct, cat, 100, tail.PeriodStart.AddDate(0, 0, 5))
+
+	require.NoError(t, svc.ProcessDueBudgetRollovers())
+
+	curStart, _ := periodBounds(string(common.BudgetPeriodMonthly), time.Now().UTC())
+	var next Budget
+	require.NoError(t, db.Where(`"seriesId" = ? AND "periodStart" = ?`, tail.SeriesId, curStart).First(&next).Error)
+	assert.InDelta(t, 0.0, next.CarriedOver, 0.001)
+}
+
+func TestRealDB_Budget_Rollover_Idempotent(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	userId := seedUser(t, db)
+	cat := seedExpenseCategory(t, db, userId, "Food")
+	svc := newSvc(db)
+
+	tail := makeTailInLastMonth(t, db, userId, &cat, 500, 0, true)
+
+	require.NoError(t, svc.ProcessDueBudgetRollovers())
+	require.NoError(t, svc.ProcessDueBudgetRollovers()) // second run must not duplicate
+
+	var count int64
+	require.NoError(t, db.Model(&Budget{}).Where(`"seriesId" = ?`, tail.SeriesId).Count(&count).Error)
+	assert.Equal(t, int64(2), count) // last month + current month only
+}
+
+func TestRealDB_Budget_Rollover_InactiveSkipped(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	userId := seedUser(t, db)
+	cat := seedExpenseCategory(t, db, userId, "Food")
+	svc := newSvc(db)
+
+	tail := makeTailInLastMonth(t, db, userId, &cat, 500, 0, true)
+	require.NoError(t, db.Model(&Budget{}).Where(`"id" = ?`, tail.ID).Update("isActive", false).Error)
+
+	require.NoError(t, svc.ProcessDueBudgetRollovers())
+
+	var count int64
+	require.NoError(t, db.Model(&Budget{}).Where(`"seriesId" = ?`, tail.SeriesId).Count(&count).Error)
+	assert.Equal(t, int64(1), count) // paused series does not roll forward
+}
+
 func TestRealDB_Budget_TableRoundTrip(t *testing.T) {
 	db := testutil.NewRealDB(t)
 	userId := seedUser(t, db)

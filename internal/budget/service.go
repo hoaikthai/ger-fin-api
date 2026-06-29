@@ -265,3 +265,95 @@ func (s *Service) Remove(id, userId string) error {
 	}
 	return s.db.Delete(b).Error
 }
+
+// ProcessDueBudgetRollovers advances each active series up to the current period.
+func (s *Service) ProcessDueBudgetRollovers() error {
+	now := time.Now().UTC()
+
+	// Latest active, non-deleted instance per series (the "tail").
+	var tails []Budget
+	err := s.db.Raw(`
+		SELECT b.* FROM "budget" b
+		WHERE b."isActive" = true AND b."deletedAt" IS NULL
+		  AND NOT EXISTS (
+			SELECT 1 FROM "budget" b2
+			WHERE b2."seriesId" = b."seriesId"
+			  AND b2."deletedAt" IS NULL
+			  AND b2."periodStart" > b."periodStart"
+		  )
+	`).Scan(&tails).Error
+	if err != nil {
+		return err
+	}
+
+	for _, tail := range tails {
+		if err := s.rollSeriesForward(tail, now); err != nil {
+			log.Printf("budget: failed to roll series %s forward: %v", tail.SeriesId, err)
+		}
+	}
+	return nil
+}
+
+func (s *Service) rollSeriesForward(tail Budget, now time.Time) error {
+	targetStart, _ := periodBounds(tail.PeriodType, now)
+	cur := tail
+
+	for cur.PeriodStart.Before(targetStart) {
+		prevSpent, err := s.computeSpent(cur.UserId, cur.CategoryId, cur.PeriodStart, cur.PeriodEnd, cur.Currency)
+		if err != nil {
+			return err
+		}
+
+		// rollover computed in the tail's currency
+		carried := 0.0
+		if cur.Rollover {
+			carried = math.Max(0, (cur.Amount+cur.CarriedOver)-prevSpent)
+		}
+
+		amount := cur.Amount
+		currency := cur.Currency
+
+		// If base currency changed, restate the whole instance in the new currency.
+		base, _ := s.settings.GetBaseCurrency(cur.UserId)
+		if base != "" && base != cur.Currency && s.conv != nil {
+			convAmount, aErr := s.conv.Convert(amount, cur.Currency, base)
+			convCarried := 0.0
+			cErr := error(nil)
+			if carried > 0 {
+				convCarried, cErr = s.conv.Convert(carried, cur.Currency, base)
+			}
+			if aErr == nil && cErr == nil {
+				amount = convAmount
+				carried = convCarried
+				currency = base
+			} else {
+				log.Printf("budget: series %s keeping currency %s (rate to %s unavailable)", cur.SeriesId, cur.Currency, base)
+			}
+		}
+
+		nextStart := nextPeriodStart(cur.PeriodType, cur.PeriodStart)
+		_, nextEnd := periodBounds(cur.PeriodType, nextStart)
+
+		next := Budget{
+			SeriesId:    cur.SeriesId,
+			CategoryId:  cur.CategoryId,
+			UserId:      cur.UserId,
+			PeriodType:  cur.PeriodType,
+			PeriodStart: nextStart,
+			PeriodEnd:   nextEnd,
+			Amount:      amount,
+			Currency:    currency,
+			CarriedOver: carried,
+			Rollover:    cur.Rollover,
+			IsActive:    true,
+		}
+		if err := s.db.Create(&next).Error; err != nil {
+			if isUniqueViolation(err) {
+				return nil // already created by a concurrent/previous run
+			}
+			return err
+		}
+		cur = next
+	}
+	return nil
+}
