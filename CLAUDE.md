@@ -243,6 +243,8 @@ Run the API:
 go run cmd/main.go
 ```
 
+API routes are served under `/api/v1` (e.g. `POST /api/v1/auth/login`); `/health` and `/swagger/*` stay at root.
+
 Swagger UI: `http://localhost:3000/swagger/index.html`
 
 Config is loaded via Viper from environment variables (see `internal/config/config.go`).

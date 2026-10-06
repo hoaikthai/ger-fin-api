@@ -28,7 +28,7 @@ import (
 // @version			1.0
 // @description		Personal finance management API
 // @host			localhost:3000
-// @BasePath		/
+// @BasePath		/api/v1
 // @securityDefinitions.apikey BearerAuth
 // @in				header
 // @name			Authorization
@@ -109,7 +109,7 @@ func main() {
 	})
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
-	api := r.Group("")
+	api := r.Group("/api/v1")
 	authHandler.RegisterRoutes(api)
 	userHandler.RegisterRoutes(api, jwtAuth)
 	accountHandler.RegisterRoutes(api, jwtAuth)

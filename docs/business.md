@@ -106,7 +106,7 @@ On startup, a fixed set of default categories (income and expense) is upserted. 
 
 ## API Surface
 
-Base URL: `http://localhost:3000`  
+Base URL: `http://localhost:3000/api/v1` (`/health` and `/swagger/*` stay at root)  
 Swagger UI: `http://localhost:3000/swagger/index.html`
 
 ### Auth
