@@ -6,6 +6,7 @@ import (
 	"ger_fin_api/internal/common"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Service struct {
@@ -16,13 +17,17 @@ func NewService(db *gorm.DB) *Service {
 	return &Service{db: db}
 }
 
-func (s *Service) withRelations(q *gorm.DB) *gorm.DB {
-	return q.Preload("Parent").Preload("Children")
+// withRelations preloads Parent and Children. Children are filtered to the
+// user's own and default categories: default parents are shared across users,
+// so an unfiltered preload would expose other users' child categories.
+func (s *Service) withRelations(q *gorm.DB, userId string) *gorm.DB {
+	return q.Preload("Parent").
+		Preload("Children", `"userId" = ? OR "isDefault" = ?`, userId, true)
 }
 
 func (s *Service) FindAll(userId string) ([]Category, error) {
 	var categories []Category
-	err := s.withRelations(s.db).
+	err := s.withRelations(s.db, userId).
 		Where("\"userId\" = ? OR \"isDefault\" = ?", userId, true).
 		Order("name ASC").
 		Find(&categories).Error
@@ -31,7 +36,7 @@ func (s *Service) FindAll(userId string) ([]Category, error) {
 
 func (s *Service) FindAllByType(userId string, txType common.TransactionType) ([]Category, error) {
 	var categories []Category
-	err := s.withRelations(s.db).
+	err := s.withRelations(s.db, userId).
 		Where("(\"userId\" = ? OR \"isDefault\" = ?) AND type = ?", userId, true, txType).
 		Order("name ASC").
 		Find(&categories).Error
@@ -40,7 +45,7 @@ func (s *Service) FindAllByType(userId string, txType common.TransactionType) ([
 
 func (s *Service) FindOne(id, userId string) (*Category, error) {
 	var cat Category
-	err := s.withRelations(s.db).First(&cat, "id = ?", id).Error
+	err := s.withRelations(s.db, userId).First(&cat, "id = ?", id).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, common.NewNotFound("Category not found")
 	}
@@ -92,23 +97,51 @@ func (s *Service) Update(id string, dto UpdateCategoryDto, userId string) (*Cate
 		return nil, common.NewForbidden("Cannot update default categories")
 	}
 
-	if dto.ParentId != nil && dto.ParentId != cat.ParentId {
-		parent, err := s.FindOne(*dto.ParentId, userId)
+	finalType := cat.Type
+	if dto.Type != nil {
+		finalType = string(*dto.Type)
+	}
+
+	finalParentId := cat.ParentId
+	if dto.ParentId != nil {
+		if *dto.ParentId == cat.ID {
+			return nil, common.NewBadRequest("Category cannot be its own parent")
+		}
+		if len(cat.Children) > 0 {
+			return nil, common.NewBadRequest("Cannot move a category that has child categories under a parent")
+		}
+		finalParentId = dto.ParentId
+	}
+
+	if finalParentId != nil {
+		parent, err := s.FindOne(*finalParentId, userId)
 		if err != nil {
 			return nil, err
 		}
 		if parent.ParentId != nil {
 			return nil, common.NewBadRequest("Cannot create category under a child category")
 		}
-		finalType := cat.Type
-		if dto.Type != nil {
-			finalType = string(*dto.Type)
-		}
 		if parent.Type != finalType {
 			return nil, common.NewBadRequest("Category type must match parent type")
 		}
-		cat.ParentId = dto.ParentId
 	}
+
+	if finalType != cat.Type {
+		for _, child := range cat.Children {
+			if child.Type != finalType {
+				return nil, common.NewBadRequest("Cannot change type of a category whose children have a different type")
+			}
+		}
+		var txCount int64
+		if err := s.db.Raw(`SELECT COUNT(*) FROM "transaction" WHERE "categoryId" = ? AND "deletedAt" IS NULL`, cat.ID).Scan(&txCount).Error; err != nil {
+			return nil, err
+		}
+		if txCount > 0 {
+			return nil, common.NewBadRequest("Cannot change type of a category that has associated transactions")
+		}
+	}
+
+	cat.ParentId = finalParentId
 
 	if dto.Name != nil {
 		cat.Name = *dto.Name
@@ -117,10 +150,11 @@ func (s *Service) Update(id string, dto UpdateCategoryDto, userId string) (*Cate
 		cat.Type = string(*dto.Type)
 	}
 
-	if err := s.db.Save(cat).Error; err != nil {
+	// Omit associations: a stale preloaded Parent would overwrite parentId.
+	if err := s.db.Omit(clause.Associations).Save(cat).Error; err != nil {
 		return nil, err
 	}
-	return cat, nil
+	return s.FindOne(id, userId)
 }
 
 func (s *Service) Remove(id, userId string) error {

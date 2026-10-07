@@ -264,7 +264,7 @@ func TestRealDB_Report_TopCategories(t *testing.T) {
 	seedTx(t, db, userId, cat2.ID, acc.ID, common.TransactionTypeExpense, -300, now)
 	seedTx(t, db, userId, cat3.ID, acc.ID, common.TransactionTypeExpense, -200, now)
 
-	results, err := svc.TopCategories(userId, from, to, 2)
+	results, err := svc.TopCategories(userId, from, to, 2, "USD")
 	require.NoError(t, err)
 	require.Len(t, results, 2)
 
@@ -289,7 +289,7 @@ func TestRealDB_Report_TopCategories_PercentageRelativeToAll(t *testing.T) {
 	seedTx(t, db, userId, cat2.ID, acc.ID, common.TransactionTypeExpense, -400, now)
 
 	// limit=1 but percentage should be relative to all 1000 total expense
-	results, err := svc.TopCategories(userId, from, to, 1)
+	results, err := svc.TopCategories(userId, from, to, 1, "USD")
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	assert.Equal(t, 60.0, results[0].Percentage)
@@ -328,7 +328,7 @@ func TestRealDB_CashFlow_Actual(t *testing.T) {
 	seedTx(t, db, userId, incomeCat.ID, acc.ID, common.TransactionTypeIncome, 2000, now)
 	seedTx(t, db, userId, expenseCat.ID, acc.ID, common.TransactionTypeExpense, -800, now)
 
-	resp, err := svc.CashFlow(userId, from, to, 3)
+	resp, err := svc.CashFlow(userId, from, to, 3, "USD")
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 
@@ -355,7 +355,7 @@ func TestRealDB_CashFlow_ProjectedRollingAverage(t *testing.T) {
 	seedTx(t, db, userId, incomeCat.ID, acc.ID, common.TransactionTypeIncome, 1500, m1)
 	seedTx(t, db, userId, incomeCat.ID, acc.ID, common.TransactionTypeIncome, 1500, m2)
 
-	resp, err := svc.CashFlow(userId, from, to, 3)
+	resp, err := svc.CashFlow(userId, from, to, 3, "USD")
 	require.NoError(t, err)
 
 	// Rolling avg = 3000 / 3 = 1000/month; period ≈ current partial month
@@ -378,7 +378,7 @@ func TestRealDB_CashFlow_RecurringComponent(t *testing.T) {
 
 	seedRecurringTx(t, db, userId, incomeCat.ID, acc.ID, common.TransactionTypeIncome, 500, common.RecurrenceFrequencyMonthly, from)
 
-	resp, err := svc.CashFlow(userId, from, to, 3)
+	resp, err := svc.CashFlow(userId, from, to, 3, "USD")
 	require.NoError(t, err)
 
 	assert.Equal(t, 500.0, resp.Recurring.Income)
@@ -409,7 +409,7 @@ func TestRealDB_CashFlow_ExcludesTransfers(t *testing.T) {
 	}, userId)
 	require.NoError(t, err)
 
-	resp, err := svc.CashFlow(userId, from, to, 3)
+	resp, err := svc.CashFlow(userId, from, to, 3, "USD")
 	require.NoError(t, err)
 
 	// Only the -100 expense should appear; transfer legs excluded
@@ -435,7 +435,7 @@ func TestRealDB_CashFlow_IsolatedByUser(t *testing.T) {
 	seedTx(t, db, userA, catA.ID, accA.ID, common.TransactionTypeIncome, 500, now)
 	seedTx(t, db, userB, catB.ID, accB.ID, common.TransactionTypeIncome, 9999, now)
 
-	resp, err := svc.CashFlow(userA, from, to, 3)
+	resp, err := svc.CashFlow(userA, from, to, 3, "USD")
 	require.NoError(t, err)
 	assert.Equal(t, 500.0, resp.Actual.Income)
 }
@@ -459,7 +459,7 @@ func TestRealDB_YearOverYear(t *testing.T) {
 	from := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(year, 3, 31, 23, 59, 59, 0, time.UTC)
 
-	resp, err := svc.YearOverYear(userId, from, to, 2)
+	resp, err := svc.YearOverYear(userId, from, to, 2, "USD")
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 
@@ -494,7 +494,7 @@ func TestRealDB_YearOverYear_FillsEmptyMonths(t *testing.T) {
 	from := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(year, 3, 31, 23, 59, 59, 0, time.UTC)
 
-	resp, err := svc.YearOverYear(userId, from, to, 1)
+	resp, err := svc.YearOverYear(userId, from, to, 1, "USD")
 	require.NoError(t, err)
 
 	require.Len(t, resp.Years, 1)
@@ -515,7 +515,7 @@ func TestRealDB_YearOverYear_MonthsAxisAnchored(t *testing.T) {
 	from := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(year, 3, 31, 23, 59, 59, 0, time.UTC)
 
-	resp, err := svc.YearOverYear(userId, from, to, 2)
+	resp, err := svc.YearOverYear(userId, from, to, 2, "USD")
 	require.NoError(t, err)
 
 	require.Len(t, resp.Months, 3)
@@ -542,7 +542,7 @@ func TestRealDB_YearOverYear_IsolatedByUser(t *testing.T) {
 	from := time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(year, 1, 31, 23, 59, 59, 0, time.UTC)
 
-	resp, err := svc.YearOverYear(userA, from, to, 1)
+	resp, err := svc.YearOverYear(userA, from, to, 1, "USD")
 	require.NoError(t, err)
 
 	require.Len(t, resp.Years, 1)

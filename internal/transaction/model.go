@@ -23,6 +23,9 @@ type Transaction struct {
 	RecurringTransactionId *string             `gorm:"column:recurringTransactionId;type:uuid"   json:"recurringTransactionId,omitempty"`
 	OriginalCurrency       *string             `gorm:"column:originalCurrency;type:varchar(3)"   json:"originalCurrency,omitempty"`
 	OriginalAmount         *float64            `gorm:"column:originalAmount;type:numeric(15,2)"  json:"originalAmount,omitempty"`
+	// BalanceApplied is false for transactions created before balance tracking;
+	// those never moved the account balance, so edits/deletes must not either.
+	BalanceApplied bool `gorm:"column:balanceApplied;not null;default:true" json:"-"`
 }
 
 func (Transaction) TableName() string { return "transaction" }

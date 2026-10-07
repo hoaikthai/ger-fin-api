@@ -17,6 +17,7 @@ import (
 	"ger_fin_api/internal/common"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Transfer looks up these seeded categories by name; they must match SeedDefaultCategories exactly.
@@ -68,6 +69,16 @@ func getDateRange(period common.TimePeriod, offset int) time.Time {
 		adjustedMonth := ((month%12)+12)%12 + 1 // back to 1-based
 		return time.Date(year, time.Month(adjustedMonth), 1, 0, 0, 0, 0, now.Location())
 	}
+}
+
+// adjustBalance applies delta to an account's running balance. Amounts are
+// signed (income > 0, expense < 0), so a transaction's effect is +amount.
+func adjustBalance(db *gorm.DB, accountId string, delta float64) error {
+	if delta == 0 {
+		return nil
+	}
+	return db.Model(&account.Account{}).Where("id = ?", accountId).
+		Update("balance", gorm.Expr("balance + ?", delta)).Error
 }
 
 func validateAmountSign(txType common.TransactionType, amount float64) error {
@@ -124,11 +135,18 @@ func (s *Service) Create(dto CreateTransactionDto, userId string) (*Transaction,
 		TransactionDate:  txDate,
 		OriginalCurrency: dto.OriginalCurrency,
 		OriginalAmount:   dto.OriginalAmount,
+		BalanceApplied:   true,
 	}
 
-	if err := s.db.Create(tx).Error; err != nil {
+	if err := s.db.Transaction(func(db *gorm.DB) error {
+		if err := db.Create(tx).Error; err != nil {
+			return err
+		}
+		return adjustBalance(db, tx.AccountId, tx.Amount)
+	}); err != nil {
 		return nil, err
 	}
+	acc.Balance += tx.Amount
 	tx.Account = &acc
 	return tx, nil
 }
@@ -170,6 +188,15 @@ func (s *Service) Update(id string, dto UpdateTransactionDto, userId string) (*T
 		}
 	}
 
+	finalType := common.TransactionType(tx.Type)
+	if dto.Type != nil {
+		finalType = *dto.Type
+	}
+
+	finalCategoryType := ""
+	if tx.Category != nil {
+		finalCategoryType = tx.Category.Type
+	}
 	if dto.CategoryId != nil {
 		var cat category.Category
 		if err := s.db.First(&cat, "id = ?", *dto.CategoryId).Error; err != nil {
@@ -181,11 +208,10 @@ func (s *Service) Update(id string, dto UpdateTransactionDto, userId string) (*T
 		if !cat.IsDefault && (cat.UserId == nil || *cat.UserId != userId) {
 			return nil, common.NewBadRequest("Access denied to this category")
 		}
+		finalCategoryType = cat.Type
 	}
-
-	finalType := common.TransactionType(tx.Type)
-	if dto.Type != nil {
-		finalType = *dto.Type
+	if finalCategoryType != "" && finalCategoryType != string(finalType) {
+		return nil, common.NewBadRequest("Category type must match transaction type")
 	}
 	finalAmount := tx.Amount
 	if dto.Amount != nil {
@@ -195,6 +221,8 @@ func (s *Service) Update(id string, dto UpdateTransactionDto, userId string) (*T
 	if err := validateAmountSign(finalType, finalAmount); err != nil {
 		return nil, err
 	}
+
+	oldAccountId, oldAmount := tx.AccountId, tx.Amount
 
 	if dto.Type != nil {
 		tx.Type = string(*dto.Type)
@@ -221,18 +249,58 @@ func (s *Service) Update(id string, dto UpdateTransactionDto, userId string) (*T
 		tx.OriginalAmount = dto.OriginalAmount
 	}
 
-	if err := s.db.Save(tx).Error; err != nil {
+	if err := s.db.Transaction(func(db *gorm.DB) error {
+		// Omit associations: the preloaded Account/Category are stale when the IDs
+		// changed, and GORM would otherwise copy their IDs back onto the foreign keys.
+		if err := db.Omit(clause.Associations).Save(tx).Error; err != nil {
+			return err
+		}
+		if !tx.BalanceApplied {
+			return nil
+		}
+		// Reverse the old effect, then apply the new one.
+		if err := adjustBalance(db, oldAccountId, -oldAmount); err != nil {
+			return err
+		}
+		return adjustBalance(db, tx.AccountId, tx.Amount)
+	}); err != nil {
 		return nil, err
 	}
-	return tx, nil
+	return s.FindOne(id, userId)
 }
 
+// Remove soft-deletes a transaction. For a transfer, the linked transaction on
+// the other account is deleted with it.
 func (s *Service) Remove(id, userId string) error {
 	tx, err := s.FindOne(id, userId)
 	if err != nil {
 		return err
 	}
-	return s.db.Delete(tx).Error
+	return s.db.Transaction(func(db *gorm.DB) error {
+		if tx.RelatedTransactionId != nil {
+			var related Transaction
+			err := db.Where("id = ? AND \"userId\" = ?", *tx.RelatedTransactionId, userId).First(&related).Error
+			if err == nil {
+				if err := db.Delete(&related).Error; err != nil {
+					return err
+				}
+				if related.BalanceApplied {
+					if err := adjustBalance(db, related.AccountId, -related.Amount); err != nil {
+						return err
+					}
+				}
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+		}
+		if err := db.Delete(tx).Error; err != nil {
+			return err
+		}
+		if !tx.BalanceApplied {
+			return nil
+		}
+		return adjustBalance(db, tx.AccountId, -tx.Amount)
+	})
 }
 
 func (s *Service) FindByAccount(accountId, userId string, period common.TimePeriod, offset int) ([]Transaction, error) {
@@ -323,6 +391,17 @@ func (s *Service) Transfer(dto CreateTransferDto, userId string) (*TransferResul
 		if err != nil {
 			return err
 		}
+		// Link both sides so reports/budgets exclude them and deletes cascade.
+		if err := tx.Model(&Transaction{}).Where("id = ?", src.ID).
+			Update("relatedTransactionId", dst.ID).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&Transaction{}).Where("id = ?", dst.ID).
+			Update("relatedTransactionId", src.ID).Error; err != nil {
+			return err
+		}
+		src.RelatedTransactionId = &dst.ID
+		dst.RelatedTransactionId = &src.ID
 		result = &TransferResult{SourceTransaction: src, DestinationTransaction: dst}
 		return nil
 	}); err != nil {
@@ -367,22 +446,9 @@ func (s *Service) loadUserEntities(userId string, categoryMapping map[string]str
 		catById[userCategories[i].ID] = &userCategories[i]
 	}
 
+	// Mapping targets must be the user's own or default categories (catById);
+	// anything else is ignored and surfaces as an unknown category.
 	if len(categoryMapping) > 0 {
-		var idsToLoad []string
-		for _, catId := range categoryMapping {
-			if _, ok := catById[catId]; !ok {
-				idsToLoad = append(idsToLoad, catId)
-			}
-		}
-		if len(idsToLoad) > 0 {
-			var extra []category.Category
-			if err := s.db.Where("id IN ?", idsToLoad).Find(&extra).Error; err != nil {
-				return nil, nil, err
-			}
-			for i := range extra {
-				catById[extra[i].ID] = &extra[i]
-			}
-		}
 		for csvName, catId := range categoryMapping {
 			if _, ok := catByName[csvName]; !ok {
 				if cat, ok := catById[catId]; ok {
@@ -452,6 +518,10 @@ func validateRows(ctx *csvContext) []string {
 		acc, accKnown := ctx.accByName[r[ctx.colIdx["Wallet"]]]
 		cat, catKnown := ctx.catByName[r[ctx.colIdx["Category"]]]
 		if !accKnown || !catKnown {
+			continue
+		}
+		if _, err := parseTxDate(r[ctx.colIdx["Date"]]); err != nil {
+			errs = append(errs, fmt.Sprintf("Row %d: invalid date %q", rowNum, r[ctx.colIdx["Date"]]))
 			continue
 		}
 		amount, err := parseAmount(r[ctx.colIdx["Amount"]])
@@ -524,6 +594,10 @@ func (s *Service) ValidateCsv(csvData []byte, userId string, categoryMapping map
 			continue
 		}
 
+		if _, err := parseTxDate(r[colIdx["Date"]]); err != nil {
+			rowErrors = append(rowErrors, fmt.Sprintf("Row %d: invalid date %q", rowNum, r[colIdx["Date"]]))
+			continue
+		}
 		amount, err := parseAmount(r[colIdx["Amount"]])
 		if err != nil {
 			rowErrors = append(rowErrors, fmt.Sprintf("Row %d: invalid amount %q", rowNum, r[colIdx["Amount"]]))
@@ -638,7 +712,7 @@ func (s *Service) ImportFromCsv(csvData []byte, userId string, categoryMapping m
 		acc := ctx.accByName[r[ctx.colIdx["Wallet"]]]
 		cat := ctx.catByName[r[ctx.colIdx["Category"]]]
 		amount, _ := parseAmount(r[ctx.colIdx["Amount"]])
-		date := parseTxDate(r[ctx.colIdx["Date"]])
+		date, _ := parseTxDate(r[ctx.colIdx["Date"]]) // validated in validateRows
 
 		note := ""
 		if idx, ok := ctx.colIdx["Note"]; ok && idx < len(r) {
@@ -710,12 +784,11 @@ func (s *Service) ImportFromCsv(csvData []byte, userId string, categoryMapping m
 	return &ImportResult{Imported: imported, Skipped: skipped}, nil
 }
 
-func parseTxDate(s string) time.Time {
+func parseTxDate(s string) (time.Time, error) {
 	if t, err := time.Parse("2006-01-02", s); err == nil {
-		return t
+		return t, nil
 	}
-	t, _ := time.Parse(time.RFC3339, s)
-	return t
+	return time.Parse(time.RFC3339, s)
 }
 
 func parseAmount(s string) (float64, error) {

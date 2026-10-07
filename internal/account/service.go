@@ -57,7 +57,17 @@ func (s *Service) Update(id, userId string, dto UpdateAccountDto) (*Account, err
 	if dto.Name != nil {
 		a.Name = *dto.Name
 	}
-	if dto.Currency != nil {
+	if dto.Currency != nil && *dto.Currency != a.Currency {
+		// Transaction amounts are stored in the account's currency; changing it
+		// would silently relabel them as a different currency.
+		var txCount int64
+		if err := s.db.Raw(`SELECT COUNT(*) FROM "transaction" WHERE "accountId" = ? AND "deletedAt" IS NULL`, a.ID).
+			Scan(&txCount).Error; err != nil {
+			return nil, err
+		}
+		if txCount > 0 {
+			return nil, common.NewBadRequest("Cannot change the currency of an account that has transactions")
+		}
 		a.Currency = *dto.Currency
 	}
 	if dto.Balance != nil {

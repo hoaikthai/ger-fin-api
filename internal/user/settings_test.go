@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"ger_fin_api/internal/common"
 	"ger_fin_api/internal/testutil"
 )
 
@@ -117,4 +118,28 @@ func TestRealDB_Settings_ClearDefaultAccount(t *testing.T) {
 	updated, err := svc.UpdateSettings(u.ID, UpdateSettingsDto{DefaultAccountId: &empty})
 	require.NoError(t, err)
 	assert.Nil(t, updated.DefaultAccountId)
+}
+
+func TestRealDB_Settings_RejectsForeignDefaultAccount(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	svc := NewService(db)
+
+	owner, err := svc.Create(newTestUser("test-" + uuid.New().String() + "@example.com"))
+	require.NoError(t, err)
+	other, err := svc.Create(newTestUser("test-" + uuid.New().String() + "@example.com"))
+	require.NoError(t, err)
+
+	var foreignAccountId string
+	require.NoError(t, db.Raw(`INSERT INTO "account" ("name", "currency", "userId") VALUES ('X', 'USD', ?) RETURNING "id"`, other.ID).
+		Scan(&foreignAccountId).Error)
+
+	_, err = svc.UpdateSettings(owner.ID, UpdateSettingsDto{DefaultAccountId: &foreignAccountId})
+	var appErr *common.AppError
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, 404, appErr.Code)
+
+	bad := "not-a-uuid"
+	_, err = svc.UpdateSettings(owner.ID, UpdateSettingsDto{DefaultAccountId: &bad})
+	require.ErrorAs(t, err, &appErr)
+	assert.Equal(t, 400, appErr.Code)
 }

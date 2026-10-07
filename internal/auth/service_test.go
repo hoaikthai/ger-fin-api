@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/stretchr/testify/assert"
@@ -56,11 +57,7 @@ func TestRealDB_Auth_Register_DuplicateEmail(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = authSvc.Register(RegisterDto{Email: email, Password: "other-password"})
-	require.Error(t, err)
-
-	var appErr *common.AppError
-	require.True(t, errors.As(err, &appErr))
-	assert.Equal(t, 409, appErr.Code)
+	assert.ErrorIs(t, err, ErrEmailTaken)
 }
 
 func TestRealDB_Auth_Login_Success(t *testing.T) {
@@ -129,4 +126,46 @@ func TestRealDB_Auth_ValidateUser_WrongCredentials(t *testing.T) {
 	var appErr *common.AppError
 	require.True(t, errors.As(err, &appErr))
 	assert.Equal(t, 401, appErr.Code)
+}
+
+func TestRealDB_Auth_EmailIsCaseInsensitive(t *testing.T) {
+	authSvc, _ := newRealAuthSvc(t)
+	email := uniqueEmail(t)
+
+	_, err := authSvc.Register(RegisterDto{Email: "Mixed." + email, Password: "password123"})
+	require.NoError(t, err)
+
+	_, err = authSvc.Login("mixed."+email, "password123")
+	require.NoError(t, err)
+
+	_, err = authSvc.Register(RegisterDto{Email: "MIXED." + email, Password: "password123"})
+	assert.ErrorIs(t, err, ErrEmailTaken)
+}
+
+func TestRealDB_Auth_LogoutRevokesToken(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	authSvc := NewService(user.NewService(db), "test-secret", time.Hour)
+	store := NewTokenStore(db)
+	email := uniqueEmail(t)
+
+	_, err := authSvc.Register(RegisterDto{Email: email, Password: "password123"})
+	require.NoError(t, err)
+	tokenStr, err := authSvc.Login(email, "password123")
+	require.NoError(t, err)
+
+	claims := &common.JWTClaims{}
+	_, _, err = jwt.NewParser().ParseUnverified(tokenStr, claims)
+	require.NoError(t, err)
+	require.NotEmpty(t, claims.ID)
+
+	revoked, err := store.IsRevoked(claims.ID)
+	require.NoError(t, err)
+	assert.False(t, revoked)
+
+	require.NoError(t, store.Revoke(claims.ID, claims.ExpiresAt.Time))
+	require.NoError(t, store.Revoke(claims.ID, claims.ExpiresAt.Time)) // idempotent
+
+	revoked, err = store.IsRevoked(claims.ID)
+	require.NoError(t, err)
+	assert.True(t, revoked)
 }

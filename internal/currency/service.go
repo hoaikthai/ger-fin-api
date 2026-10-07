@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
@@ -13,9 +15,18 @@ import (
 
 var ErrRateNotFound = errors.New("exchange rate not found")
 
+// ErrRefreshTooSoon is returned when a refresh is requested within minRefreshInterval
+// of the previous one; it protects the OXR API quota from being exhausted by clients.
+var ErrRefreshTooSoon = errors.New("exchange rates were refreshed recently")
+
+const minRefreshInterval = 10 * time.Minute
+
 type Service struct {
 	db    *gorm.DB
 	appID string
+
+	refreshMu   sync.Mutex
+	lastRefresh time.Time
 }
 
 func NewService(db *gorm.DB, appID string) *Service {
@@ -29,8 +40,13 @@ func (s *Service) FetchAndStoreRates() error {
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(fmt.Sprintf("https://openexchangerates.org/api/latest.json?app_id=%s", s.appID))
+	resp, err := client.Get(fmt.Sprintf("https://openexchangerates.org/api/latest.json?app_id=%s", url.QueryEscape(s.appID)))
 	if err != nil {
+		// *url.Error embeds the request URL, which contains the app_id; strip it before logging.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
 		return fmt.Errorf("fetch rates from OXR: %w", err)
 	}
 	defer resp.Body.Close()
@@ -86,6 +102,21 @@ func (s *Service) FetchAndStoreRates() error {
 			len(payload.Rates), payload.Base, len(existing), len(toCreate))
 		return nil
 	})
+}
+
+// RefreshRates is the user-triggered refresh: like FetchAndStoreRates but
+// rate-limited across all users to one call per minRefreshInterval.
+func (s *Service) RefreshRates() error {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
+	if !s.lastRefresh.IsZero() && time.Since(s.lastRefresh) < minRefreshInterval {
+		return ErrRefreshTooSoon
+	}
+	if err := s.FetchAndStoreRates(); err != nil {
+		return err
+	}
+	s.lastRefresh = time.Now()
+	return nil
 }
 
 func (s *Service) Convert(amount float64, from, to string) (float64, error) {

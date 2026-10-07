@@ -12,7 +12,12 @@ import (
 
 const userKey = "user"
 
-func JWTAuth(secret string) gin.HandlerFunc {
+// RevocationChecker reports whether a token ID (jti) has been revoked by logout.
+type RevocationChecker interface {
+	IsRevoked(jti string) (bool, error)
+}
+
+func JWTAuth(secret string, revoked RevocationChecker) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		header := c.GetHeader("Authorization")
 		if header == "" || !strings.HasPrefix(header, "Bearer ") {
@@ -31,7 +36,20 @@ func JWTAuth(secret string) gin.HandlerFunc {
 			return []byte(secret), nil
 		})
 
-		if err != nil || !token.Valid {
+		// Tokens without a jti predate logout support and cannot be revoked.
+		if err != nil || !token.Valid || claims.ID == "" {
+			common.RespondError(c, common.NewUnauthorized("Unauthorized"))
+			c.Abort()
+			return
+		}
+
+		isRevoked, err := revoked.IsRevoked(claims.ID)
+		if err != nil {
+			common.RespondInternalError(c)
+			c.Abort()
+			return
+		}
+		if isRevoked {
 			common.RespondError(c, common.NewUnauthorized("Unauthorized"))
 			c.Abort()
 			return

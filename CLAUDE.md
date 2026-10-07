@@ -249,6 +249,18 @@ Swagger UI: `http://localhost:3000/swagger/index.html`
 
 Config is loaded via Viper from environment variables (see `internal/config/config.go`).
 
+Security-related settings:
+
+| Variable               | Default            | Notes                                                                 |
+|------------------------|--------------------|-----------------------------------------------------------------------|
+| `JWT_SECRET`           | — (required)       | Must be ≥ 32 bytes or startup fails. `openssl rand -base64 48`        |
+| `DB_SSLMODE`           | `disable`          | Use `require` (or stricter) when Postgres is on another host          |
+| `CORS_ALLOWED_ORIGINS` | allow all          | Comma-separated origin allow-list                                     |
+| `TRUSTED_PROXIES`      | trust none         | Comma-separated IPs/CIDRs of reverse proxies; needed for correct client IPs (auth rate limit) behind a proxy |
+
+Real-DB tests (`TestRealDB_*`) skip when Postgres is unreachable. Point them at any Postgres via env vars, e.g.
+`DB_HOST=localhost DB_PORT=55432 DB_USER=postgres DB_PASS=… DB_NAME=fin_db go test -p 1 ./...`
+
 ---
 
 ## Common Pitfalls
@@ -258,3 +270,5 @@ Config is loaded via Viper from environment variables (see `internal/config/conf
 - Returning non-`AppError` errors from service to handler → caller gets a 500 instead of the correct status code.
 - Querying without scoping to `userId` → data leak across users.
 - Hard-deleting instead of soft-deleting → bypasses GORM's `DeletedAt` filter and data is unrecoverable.
+- `db.Save(x)` on a struct with preloaded belongs-to associations (e.g. `Account`, `Category`, `Parent`) copies the association's ID back onto the foreign key — an update to `accountId` is silently reverted. Use `db.Omit(clause.Associations).Save(x)` and reload.
+- Preloading `Children` of shared default categories must be filtered by `userId`, or other users' categories leak.

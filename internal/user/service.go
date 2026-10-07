@@ -5,6 +5,8 @@ import (
 
 	"ger_fin_api/internal/common"
 
+	"github.com/google/uuid"
+
 	"gorm.io/gorm"
 )
 
@@ -18,7 +20,7 @@ func NewService(db *gorm.DB) *Service {
 
 func (s *Service) FindByEmail(email string) (*User, error) {
 	var u User
-	err := s.db.Where("email = ?", email).First(&u).Error
+	err := s.db.Where("LOWER(email) = LOWER(?)", email).First(&u).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
@@ -81,6 +83,14 @@ func (s *Service) GetSettings(userId string) (*UserSettings, error) {
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		settings = UserSettings{UserId: userId}
 		if err := s.db.Create(&settings).Error; err != nil {
+			// A concurrent first request created the row; read it back.
+			if common.IsUniqueViolation(err) {
+				settings = UserSettings{}
+				if err := s.db.Where("\"userId\" = ?", userId).First(&settings).Error; err != nil {
+					return nil, err
+				}
+				return &settings, nil
+			}
 			return nil, err
 		}
 		return &settings, nil
@@ -110,6 +120,18 @@ func (s *Service) UpdateSettings(userId string, dto UpdateSettingsDto) (*UserSet
 		if *dto.DefaultAccountId == "" {
 			settings.DefaultAccountId = nil
 		} else {
+			if _, err := uuid.Parse(*dto.DefaultAccountId); err != nil {
+				return nil, common.NewBadRequest("defaultAccountId must be a UUID")
+			}
+			var count int64
+			if err := s.db.Table("account").
+				Where(`id = ? AND "userId" = ? AND "deletedAt" IS NULL`, *dto.DefaultAccountId, userId).
+				Count(&count).Error; err != nil {
+				return nil, err
+			}
+			if count == 0 {
+				return nil, common.NewNotFound("Account not found")
+			}
 			settings.DefaultAccountId = dto.DefaultAccountId
 		}
 	}

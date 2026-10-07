@@ -20,9 +20,9 @@ type mockService struct {
 	categoryBreakdownFn func(userId string, from, to time.Time, baseCurrency string) (*CategoryBreakdownResponse, error)
 	monthlyTrendFn      func(userId string, from, to time.Time, baseCurrency string) (*MonthlyTrendResponse, error)
 	netWorthFn          func(userId string, baseCurrency string) (*NetWorthResponse, error)
-	topCategoriesFn     func(userId string, from, to time.Time, limit int) ([]CategoryRow, error)
-	cashFlowFn          func(userId string, from, to time.Time, lookbackMonths int) (*CashFlowResponse, error)
-	yearOverYearFn      func(userId string, from, to time.Time, years int) (*YearOverYearResponse, error)
+	topCategoriesFn     func(userId string, from, to time.Time, limit int, baseCurrency string) ([]CategoryRow, error)
+	cashFlowFn          func(userId string, from, to time.Time, lookbackMonths int, baseCurrency string) (*CashFlowResponse, error)
+	yearOverYearFn      func(userId string, from, to time.Time, years int, baseCurrency string) (*YearOverYearResponse, error)
 }
 
 func (m *mockService) CategoryBreakdown(userId string, from, to time.Time, baseCurrency string) (*CategoryBreakdownResponse, error) {
@@ -34,14 +34,14 @@ func (m *mockService) MonthlyTrend(userId string, from, to time.Time, baseCurren
 func (m *mockService) NetWorth(userId string, baseCurrency string) (*NetWorthResponse, error) {
 	return m.netWorthFn(userId, baseCurrency)
 }
-func (m *mockService) TopCategories(userId string, from, to time.Time, limit int) ([]CategoryRow, error) {
-	return m.topCategoriesFn(userId, from, to, limit)
+func (m *mockService) TopCategories(userId string, from, to time.Time, limit int, baseCurrency string) ([]CategoryRow, error) {
+	return m.topCategoriesFn(userId, from, to, limit, baseCurrency)
 }
-func (m *mockService) CashFlow(userId string, from, to time.Time, lookbackMonths int) (*CashFlowResponse, error) {
-	return m.cashFlowFn(userId, from, to, lookbackMonths)
+func (m *mockService) CashFlow(userId string, from, to time.Time, lookbackMonths int, baseCurrency string) (*CashFlowResponse, error) {
+	return m.cashFlowFn(userId, from, to, lookbackMonths, baseCurrency)
 }
-func (m *mockService) YearOverYear(userId string, from, to time.Time, years int) (*YearOverYearResponse, error) {
-	return m.yearOverYearFn(userId, from, to, years)
+func (m *mockService) YearOverYear(userId string, from, to time.Time, years int, baseCurrency string) (*YearOverYearResponse, error) {
+	return m.yearOverYearFn(userId, from, to, years, baseCurrency)
 }
 
 // mockSettings returns the hardcoded defaults, satisfying SettingsProvider in tests.
@@ -232,7 +232,7 @@ func TestHandler_TopCategories_Success(t *testing.T) {
 		{CategoryId: "c2", CategoryName: "Transport", Total: -200, Percentage: 40},
 	}
 	svc := &mockService{
-		topCategoriesFn: func(userId string, from, to time.Time, limit int) ([]CategoryRow, error) {
+		topCategoriesFn: func(userId string, from, to time.Time, limit int, baseCurrency string) ([]CategoryRow, error) {
 			assert.Equal(t, 2, limit)
 			return want, nil
 		},
@@ -250,7 +250,7 @@ func TestHandler_TopCategories_Success(t *testing.T) {
 func TestHandler_TopCategories_DefaultLimit(t *testing.T) {
 	var capturedLimit int
 	svc := &mockService{
-		topCategoriesFn: func(userId string, from, to time.Time, limit int) ([]CategoryRow, error) {
+		topCategoriesFn: func(userId string, from, to time.Time, limit int, baseCurrency string) ([]CategoryRow, error) {
 			capturedLimit = limit
 			return []CategoryRow{}, nil
 		},
@@ -270,7 +270,7 @@ func TestHandler_TopCategories_InvalidDate(t *testing.T) {
 
 func TestHandler_TopCategories_ServiceError(t *testing.T) {
 	svc := &mockService{
-		topCategoriesFn: func(userId string, from, to time.Time, limit int) ([]CategoryRow, error) {
+		topCategoriesFn: func(userId string, from, to time.Time, limit int, baseCurrency string) ([]CategoryRow, error) {
 			return nil, errors.New("db error")
 		},
 	}
@@ -288,7 +288,7 @@ func TestHandler_CashFlow_Success(t *testing.T) {
 		Recurring: CashFlowRecurring{Income: 500, Expense: -300},
 	}
 	svc := &mockService{
-		cashFlowFn: func(userId string, from, to time.Time, lookbackMonths int) (*CashFlowResponse, error) {
+		cashFlowFn: func(userId string, from, to time.Time, lookbackMonths int, baseCurrency string) (*CashFlowResponse, error) {
 			assert.Equal(t, "user-1", userId)
 			assert.Equal(t, 3, lookbackMonths)
 			return want, nil
@@ -307,7 +307,7 @@ func TestHandler_CashFlow_Success(t *testing.T) {
 func TestHandler_CashFlow_DefaultMonths(t *testing.T) {
 	var captured int
 	svc := &mockService{
-		cashFlowFn: func(userId string, from, to time.Time, lookbackMonths int) (*CashFlowResponse, error) {
+		cashFlowFn: func(userId string, from, to time.Time, lookbackMonths int, baseCurrency string) (*CashFlowResponse, error) {
 			captured = lookbackMonths
 			return &CashFlowResponse{Period: CashFlowPeriod{}, Actual: CashFlowSummary{}, Projected: CashFlowSummary{}, Recurring: CashFlowRecurring{}}, nil
 		},
@@ -322,7 +322,7 @@ func TestHandler_CashFlow_DefaultMonths(t *testing.T) {
 func TestHandler_CashFlow_CustomMonths(t *testing.T) {
 	var captured int
 	svc := &mockService{
-		cashFlowFn: func(userId string, from, to time.Time, lookbackMonths int) (*CashFlowResponse, error) {
+		cashFlowFn: func(userId string, from, to time.Time, lookbackMonths int, baseCurrency string) (*CashFlowResponse, error) {
 			captured = lookbackMonths
 			return &CashFlowResponse{Period: CashFlowPeriod{}, Actual: CashFlowSummary{}, Projected: CashFlowSummary{}, Recurring: CashFlowRecurring{}}, nil
 		},
@@ -342,7 +342,7 @@ func TestHandler_CashFlow_InvalidDate(t *testing.T) {
 
 func TestHandler_CashFlow_ServiceError(t *testing.T) {
 	svc := &mockService{
-		cashFlowFn: func(userId string, from, to time.Time, lookbackMonths int) (*CashFlowResponse, error) {
+		cashFlowFn: func(userId string, from, to time.Time, lookbackMonths int, baseCurrency string) (*CashFlowResponse, error) {
 			return nil, errors.New("db error")
 		},
 	}
@@ -361,7 +361,7 @@ func TestHandler_YearOverYear_Success(t *testing.T) {
 		},
 	}
 	svc := &mockService{
-		yearOverYearFn: func(userId string, from, to time.Time, years int) (*YearOverYearResponse, error) {
+		yearOverYearFn: func(userId string, from, to time.Time, years int, baseCurrency string) (*YearOverYearResponse, error) {
 			assert.Equal(t, "user-1", userId)
 			assert.Equal(t, 2, years)
 			return want, nil
@@ -380,7 +380,7 @@ func TestHandler_YearOverYear_Success(t *testing.T) {
 func TestHandler_YearOverYear_DefaultYears(t *testing.T) {
 	var captured int
 	svc := &mockService{
-		yearOverYearFn: func(userId string, from, to time.Time, years int) (*YearOverYearResponse, error) {
+		yearOverYearFn: func(userId string, from, to time.Time, years int, baseCurrency string) (*YearOverYearResponse, error) {
 			captured = years
 			return &YearOverYearResponse{Months: []string{}, Years: []YearRow{}}, nil
 		},
@@ -395,7 +395,7 @@ func TestHandler_YearOverYear_DefaultYears(t *testing.T) {
 func TestHandler_YearOverYear_CustomYears(t *testing.T) {
 	var captured int
 	svc := &mockService{
-		yearOverYearFn: func(userId string, from, to time.Time, years int) (*YearOverYearResponse, error) {
+		yearOverYearFn: func(userId string, from, to time.Time, years int, baseCurrency string) (*YearOverYearResponse, error) {
 			captured = years
 			return &YearOverYearResponse{Months: []string{}, Years: []YearRow{}}, nil
 		},
@@ -415,10 +415,24 @@ func TestHandler_YearOverYear_InvalidDate(t *testing.T) {
 
 func TestHandler_YearOverYear_ServiceError(t *testing.T) {
 	svc := &mockService{
-		yearOverYearFn: func(userId string, from, to time.Time, years int) (*YearOverYearResponse, error) {
+		yearOverYearFn: func(userId string, from, to time.Time, years int, baseCurrency string) (*YearOverYearResponse, error) {
 			return nil, errors.New("db error")
 		},
 	}
 	w := doGet(newTestRouter(svc, "user-1"), "/reports/year-over-year")
 	assert.Equal(t, http.StatusInternalServerError, w.Code)
+}
+
+// ── Date range validation ────────────────────────────────────────────────────
+
+func TestHandler_DateRange_FromAfterTo(t *testing.T) {
+	svc := &mockService{}
+	w := doGet(newTestRouter(svc, "user-1"), "/reports/year-over-year?from=2026-11-01&to=2026-02-01")
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandler_DateRange_TooLong(t *testing.T) {
+	svc := &mockService{}
+	w := doGet(newTestRouter(svc, "user-1"), "/reports/cash-flow?from=1900-01-01&to=2026-01-01")
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 }

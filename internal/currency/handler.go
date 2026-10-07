@@ -49,7 +49,11 @@ func (h *Handler) listRates(c *gin.Context) {
 // @Security    BearerAuth
 // @Router      /currencies/rates/refresh [post]
 func (h *Handler) refresh(c *gin.Context) {
-	if err := h.svc.FetchAndStoreRates(); err != nil {
+	if err := h.svc.RefreshRates(); err != nil {
+		if errors.Is(err, ErrRefreshTooSoon) {
+			common.RespondError(c, &common.AppError{Code: 429, Msg: "Rates were refreshed recently, please try again later", ErrText: "Too Many Requests"})
+			return
+		}
 		var appErr *common.AppError
 		if errors.As(err, &appErr) {
 			common.RespondError(c, appErr)

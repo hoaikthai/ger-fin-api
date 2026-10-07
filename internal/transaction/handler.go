@@ -2,10 +2,14 @@ package transaction
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"sync"
+	"time"
 
 	"ger_fin_api/internal/common"
 	"ger_fin_api/internal/middleware"
@@ -16,11 +20,19 @@ import (
 
 const maxCSVBytes = 10 * 1024 * 1024 // 10 MB
 
+// maxUploadBytes caps the whole multipart request (file + form fields + overhead).
+const maxUploadBytes = maxCSVBytes + 1024*1024
+
+// importJobTTL is how long a finished import job stays queryable before eviction.
+const importJobTTL = time.Hour
+
 type importJobState struct {
-	mu     sync.Mutex
-	status string // pending | running | done | failed
-	result *ImportResult
-	errMsg string
+	mu         sync.Mutex
+	userId     string
+	status     string // pending | running | done | failed
+	result     *ImportResult
+	errMsg     string
+	finishedAt time.Time
 }
 
 // CurrencyConverter converts an amount from one currency to another.
@@ -320,27 +332,13 @@ func (h *Handler) importCsv(c *gin.Context) {
 		return
 	}
 
+	h.evictExpiredJobs()
+
 	jobId := uuid.New().String()
-	job := &importJobState{status: "pending"}
+	job := &importJobState{userId: claims.Sub, status: "pending"}
 	h.jobs.Store(jobId, job)
 
-	go func() {
-		job.mu.Lock()
-		job.status = "running"
-		job.mu.Unlock()
-
-		result, err := h.svc.ImportFromCsv(buf, claims.Sub, categoryMapping)
-
-		job.mu.Lock()
-		defer job.mu.Unlock()
-		if err != nil {
-			job.status = "failed"
-			job.errMsg = err.Error()
-		} else {
-			job.status = "done"
-			job.result = result
-		}
-	}()
+	go h.runImportJob(jobId, job, buf, categoryMapping)
 
 	c.JSON(202, ImportJobResponse{JobId: jobId})
 }
@@ -355,7 +353,61 @@ func (h *Handler) importCsv(c *gin.Context) {
 // @Failure		404 {object} common.ErrorResponse
 // @Security	BearerAuth
 // @Router		/transactions/import/jobs/{jobId} [get]
+func (h *Handler) runImportJob(jobId string, job *importJobState, buf []byte, categoryMapping map[string]string) {
+	job.mu.Lock()
+	job.status = "running"
+	job.mu.Unlock()
+
+	var result *ImportResult
+	var err error
+	func() {
+		// A panic here would otherwise crash the whole server (gin's recovery
+		// middleware does not cover goroutines).
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("panic: %v", r)
+			}
+		}()
+		result, err = h.svc.ImportFromCsv(buf, job.userId, categoryMapping)
+	}()
+
+	job.mu.Lock()
+	defer job.mu.Unlock()
+	job.finishedAt = time.Now()
+	if err != nil {
+		job.status = "failed"
+		// Only expose AppError messages; internal errors may contain DB details.
+		var appErr *common.AppError
+		if errors.As(err, &appErr) {
+			job.errMsg = appErr.Error()
+		} else {
+			log.Printf("import job %s failed: %v", jobId, err)
+			job.errMsg = "Import failed due to an internal error"
+		}
+	} else {
+		job.status = "done"
+		job.result = result
+	}
+}
+
+// evictExpiredJobs drops finished jobs older than importJobTTL so the job map
+// does not grow without bound.
+func (h *Handler) evictExpiredJobs() {
+	cutoff := time.Now().Add(-importJobTTL)
+	h.jobs.Range(func(key, value any) bool {
+		job := value.(*importJobState)
+		job.mu.Lock()
+		expired := !job.finishedAt.IsZero() && job.finishedAt.Before(cutoff)
+		job.mu.Unlock()
+		if expired {
+			h.jobs.Delete(key)
+		}
+		return true
+	})
+}
+
 func (h *Handler) getImportJob(c *gin.Context) {
+	claims := middleware.CurrentUser(c)
 	jobId := c.Param("jobId")
 	raw, ok := h.jobs.Load(jobId)
 	if !ok {
@@ -367,6 +419,12 @@ func (h *Handler) getImportJob(c *gin.Context) {
 	job.mu.Lock()
 	defer job.mu.Unlock()
 
+	// 404 rather than 403 so other users' job IDs are not confirmed to exist.
+	if job.userId != claims.Sub {
+		common.RespondError(c, common.NewNotFound("import job not found"))
+		return
+	}
+
 	c.JSON(200, ImportJobStatus{
 		Status: job.status,
 		Result: job.result,
@@ -375,8 +433,15 @@ func (h *Handler) getImportJob(c *gin.Context) {
 }
 
 func readCsvForm(c *gin.Context) ([]byte, map[string]string, bool) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxUploadBytes)
+
 	file, err := c.FormFile("file")
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			common.RespondError(c, common.NewBadRequest("CSV file exceeds 10 MB size limit"))
+			return nil, nil, false
+		}
 		common.RespondError(c, common.NewBadRequest("No file uploaded"))
 		return nil, nil, false
 	}

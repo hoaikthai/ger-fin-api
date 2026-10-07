@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 
 	"ger_fin_api/internal/common"
@@ -68,6 +67,9 @@ func (s *Service) Create(dto CreateBudgetDto, userId string) (*Budget, error) {
 		IsActive:    true,
 	}
 	if err := s.db.Create(b).Error; err != nil {
+		if common.IsUniqueViolation(err) {
+			return nil, common.NewConflict("A budget already exists for this category and period")
+		}
 		return nil, err
 	}
 	return b, nil
@@ -119,14 +121,6 @@ func (s *Service) assertNoConflict(userId string, categoryId *string, periodType
 		return common.NewConflict("A budget already exists for this category and period")
 	}
 	return nil
-}
-
-// isUniqueViolation reports whether err is a Postgres unique-constraint
-// violation (SQLState 23505) — a backstop for the partial unique indexes
-// when two requests race.
-func isUniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 type spendRow struct {
@@ -352,7 +346,7 @@ func (s *Service) rollSeriesForward(tail Budget, now time.Time) error {
 			IsActive:    true,
 		}
 		if err := s.db.Create(&next).Error; err != nil {
-			if isUniqueViolation(err) {
+			if common.IsUniqueViolation(err) {
 				return nil // already created by a concurrent/previous run
 			}
 			return err

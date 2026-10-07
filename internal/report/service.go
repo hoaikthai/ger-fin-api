@@ -17,9 +17,9 @@ type ServiceI interface {
 	CategoryBreakdown(userId string, from, to time.Time, baseCurrency string) (*CategoryBreakdownResponse, error)
 	MonthlyTrend(userId string, from, to time.Time, baseCurrency string) (*MonthlyTrendResponse, error)
 	NetWorth(userId string, baseCurrency string) (*NetWorthResponse, error)
-	TopCategories(userId string, from, to time.Time, limit int) ([]CategoryRow, error)
-	CashFlow(userId string, from, to time.Time, lookbackMonths int) (*CashFlowResponse, error)
-	YearOverYear(userId string, from, to time.Time, years int) (*YearOverYearResponse, error)
+	TopCategories(userId string, from, to time.Time, limit int, baseCurrency string) ([]CategoryRow, error)
+	CashFlow(userId string, from, to time.Time, lookbackMonths int, baseCurrency string) (*CashFlowResponse, error)
+	YearOverYear(userId string, from, to time.Time, years int, baseCurrency string) (*YearOverYearResponse, error)
 }
 
 // CurrencyConverter converts an amount from one currency to another.
@@ -34,6 +34,20 @@ type Service struct {
 
 func NewService(db *gorm.DB, currency CurrencyConverter) *Service {
 	return &Service{db: db, currency: currency}
+}
+
+// convert converts amount into baseCurrency. ok is false when no rate is
+// available; callers exclude such rows (logged) rather than mixing currencies.
+func (s *Service) convert(amount float64, from, baseCurrency, context string) (float64, bool) {
+	if s.currency == nil || from == baseCurrency {
+		return amount, true
+	}
+	c, err := s.currency.Convert(amount, from, baseCurrency)
+	if err != nil {
+		log.Printf("report: %s skipping amount (currency %s -> %s): %v", context, from, baseCurrency, err)
+		return 0, false
+	}
+	return c, true
 }
 
 type categoryAgg struct {
@@ -229,7 +243,7 @@ func (s *Service) NetWorth(userId string, baseCurrency string) (*NetWorthRespons
 	return resp, nil
 }
 
-func (s *Service) TopCategories(userId string, from, to time.Time, limit int) ([]CategoryRow, error) {
+func (s *Service) TopCategories(userId string, from, to time.Time, limit int, baseCurrency string) ([]CategoryRow, error) {
 	if limit <= 0 {
 		limit = 5
 	}
@@ -240,82 +254,108 @@ func (s *Service) TopCategories(userId string, from, to time.Time, limit int) ([
 		SELECT t."categoryId"  AS category_id,
 		       c."name"        AS category_name,
 		       t."type"        AS tx_type,
+		       a."currency"    AS account_currency,
 		       SUM(t."amount") AS total
 		FROM "transaction" t
 		JOIN "category" c ON c."id" = t."categoryId"
+		JOIN "account"  a ON a."id" = t."accountId"
 		WHERE t."userId" = ?
 		  AND t."transactionDate" >= ?
 		  AND t."transactionDate" <= ?
 		  AND t."type" = 'expense'
 		  AND t."relatedTransactionId" IS NULL
 		  AND t."deletedAt" IS NULL
-		GROUP BY t."categoryId", c."name", t."type"
-		ORDER BY SUM(t."amount") ASC
+		GROUP BY t."categoryId", c."name", t."type", a."currency"
 	`, userId, from, to).Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
 
-	var totalExpense float64
+	// Aggregate per category in baseCurrency.
+	type catKey struct{ id, name string }
+	totals := make(map[catKey]float64)
 	for _, r := range rows {
-		totalExpense += math.Abs(r.Total)
-	}
-
-	if len(rows) > limit {
-		rows = rows[:limit]
-	}
-
-	result := make([]CategoryRow, 0, len(rows))
-	for _, r := range rows {
-		var pct float64
-		if totalExpense > 0 {
-			pct = math.Round((math.Abs(r.Total)/totalExpense)*10000) / 100
+		if v, ok := s.convert(r.Total, r.AccountCurrency, baseCurrency, "TopCategories"); ok {
+			totals[catKey{r.CategoryId, r.CategoryName}] += v
 		}
-		result = append(result, CategoryRow{
-			CategoryId:   r.CategoryId,
-			CategoryName: r.CategoryName,
-			Total:        r.Total,
-			Percentage:   pct,
-		})
+	}
+
+	var totalExpense float64
+	result := make([]CategoryRow, 0, len(totals))
+	for k, total := range totals {
+		totalExpense += math.Abs(total)
+		result = append(result, CategoryRow{CategoryId: k.id, CategoryName: k.name, Total: total})
+	}
+	// Most negative (largest expense) first.
+	sort.Slice(result, func(i, j int) bool { return result[i].Total < result[j].Total })
+
+	if len(result) > limit {
+		result = result[:limit]
+	}
+	for i := range result {
+		if totalExpense > 0 {
+			result[i].Percentage = math.Round((math.Abs(result[i].Total)/totalExpense)*10000) / 100
+		}
 	}
 	return result, nil
 }
 
 type txTotals struct {
-	Income  float64 `gorm:"column:income"`
-	Expense float64 `gorm:"column:expense"`
+	Income  float64
+	Expense float64
 }
 
-func (s *Service) CashFlow(userId string, from, to time.Time, lookbackMonths int) (*CashFlowResponse, error) {
-	var actual txTotals
+type currencyTotals struct {
+	AccountCurrency string  `gorm:"column:account_currency"`
+	Income          float64 `gorm:"column:income"`
+	Expense         float64 `gorm:"column:expense"`
+}
+
+// sumInBaseCurrency sums income/expense over [from, to) — or [from, to] when
+// inclusiveTo — converting each account currency into baseCurrency.
+func (s *Service) sumInBaseCurrency(userId string, from, to time.Time, inclusiveTo bool, baseCurrency string) (txTotals, error) {
+	upperOp := "<"
+	if inclusiveTo {
+		upperOp = "<="
+	}
+	var rows []currencyTotals
 	err := s.db.Raw(`
 		SELECT
+			a."currency" AS account_currency,
 			SUM(CASE WHEN t."type" = 'income'  THEN t."amount" ELSE 0 END) AS income,
 			SUM(CASE WHEN t."type" = 'expense' THEN t."amount" ELSE 0 END) AS expense
 		FROM "transaction" t
+		JOIN "account" a ON a."id" = t."accountId"
 		WHERE t."userId" = ?
 		  AND t."transactionDate" >= ?
-		  AND t."transactionDate" <= ?
+		  AND t."transactionDate" `+upperOp+` ?
 		  AND t."relatedTransactionId" IS NULL
 		  AND t."deletedAt" IS NULL
-	`, userId, from, to).Scan(&actual).Error
+		GROUP BY a."currency"
+	`, userId, from, to).Scan(&rows).Error
+	if err != nil {
+		return txTotals{}, err
+	}
+	var out txTotals
+	for _, r := range rows {
+		inc, incOk := s.convert(r.Income, r.AccountCurrency, baseCurrency, "CashFlow")
+		exp, expOk := s.convert(r.Expense, r.AccountCurrency, baseCurrency, "CashFlow")
+		if incOk && expOk {
+			out.Income += inc
+			out.Expense += exp
+		}
+	}
+	return out, nil
+}
+
+func (s *Service) CashFlow(userId string, from, to time.Time, lookbackMonths int, baseCurrency string) (*CashFlowResponse, error) {
+	actual, err := s.sumInBaseCurrency(userId, from, to, true, baseCurrency)
 	if err != nil {
 		return nil, err
 	}
 
 	lookbackFrom := from.AddDate(0, -lookbackMonths, 0)
-	var rolling txTotals
-	err = s.db.Raw(`
-		SELECT
-			SUM(CASE WHEN t."type" = 'income'  THEN t."amount" ELSE 0 END) AS income,
-			SUM(CASE WHEN t."type" = 'expense' THEN t."amount" ELSE 0 END) AS expense
-		FROM "transaction" t
-		WHERE t."userId" = ?
-		  AND t."transactionDate" >= ?
-		  AND t."transactionDate" < ?
-		  AND t."relatedTransactionId" IS NULL
-		  AND t."deletedAt" IS NULL
-	`, userId, lookbackFrom, from).Scan(&rolling).Error
+	rolling, err := s.sumInBaseCurrency(userId, lookbackFrom, from, false, baseCurrency)
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +369,7 @@ func (s *Service) CashFlow(userId string, from, to time.Time, lookbackMonths int
 	scaledExpense := (rolling.Expense / float64(lookbackMonths)) * scale
 
 	var rts []recurring_transaction.RecurringTransaction
-	if err := s.db.Where(`"userId" = ? AND "isActive" = ?`, userId, true).Find(&rts).Error; err != nil {
+	if err := s.db.Preload("Account").Where(`"userId" = ? AND "isActive" = ?`, userId, true).Find(&rts).Error; err != nil {
 		return nil, err
 	}
 
@@ -339,10 +379,17 @@ func (s *Service) CashFlow(userId string, from, to time.Time, lookbackMonths int
 		if count == 0 {
 			continue
 		}
+		amount := rt.Amount * float64(count)
+		if rt.Account != nil {
+			var ok bool
+			if amount, ok = s.convert(amount, rt.Account.Currency, baseCurrency, "CashFlow recurring"); !ok {
+				continue
+			}
+		}
 		if rt.Type == "income" {
-			recurIncome += rt.Amount * float64(count)
+			recurIncome += amount
 		} else {
-			recurExpense -= rt.Amount * float64(count)
+			recurExpense -= amount
 		}
 	}
 
@@ -350,6 +397,7 @@ func (s *Service) CashFlow(userId string, from, to time.Time, lookbackMonths int
 	projExpense := scaledExpense + recurExpense
 
 	return &CashFlowResponse{
+		BaseCurrency: baseCurrency,
 		Period: CashFlowPeriod{
 			From: from.Format("2006-01-02"),
 			To:   to.Format("2006-01-02"),
@@ -403,13 +451,14 @@ func advanceByFrequency(t time.Time, frequency string) time.Time {
 }
 
 type yoyAgg struct {
-	Year     int     `gorm:"column:year"`
-	MonthNum int     `gorm:"column:month_num"`
-	Income   float64 `gorm:"column:income"`
-	Expense  float64 `gorm:"column:expense"`
+	Year            int     `gorm:"column:year"`
+	MonthNum        int     `gorm:"column:month_num"`
+	AccountCurrency string  `gorm:"column:account_currency"`
+	Income          float64 `gorm:"column:income"`
+	Expense         float64 `gorm:"column:expense"`
 }
 
-func (s *Service) YearOverYear(userId string, from, to time.Time, years int) (*YearOverYearResponse, error) {
+func (s *Service) YearOverYear(userId string, from, to time.Time, years int, baseCurrency string) (*YearOverYearResponse, error) {
 	if years <= 0 || years > 5 {
 		years = 2
 	}
@@ -417,15 +466,22 @@ func (s *Service) YearOverYear(userId string, from, to time.Time, years int) (*Y
 	fromYear := from.Year() - (years - 1)
 	fromMonth := int(from.Month())
 	toMonth := int(to.Month())
+	// The window is a month range within one year; a range that wraps into a
+	// later year (e.g. Nov → Feb) runs through December.
+	if to.Year() > from.Year() || toMonth < fromMonth {
+		toMonth = 12
+	}
 
 	var rows []yoyAgg
 	err := s.db.Raw(`
 		SELECT
 			EXTRACT(YEAR  FROM t."transactionDate")::int AS year,
 			EXTRACT(MONTH FROM t."transactionDate")::int AS month_num,
+			a."currency" AS account_currency,
 			SUM(CASE WHEN t."type" = 'income'  THEN t."amount" ELSE 0 END) AS income,
 			SUM(CASE WHEN t."type" = 'expense' THEN t."amount" ELSE 0 END) AS expense
 		FROM "transaction" t
+		JOIN "account" a ON a."id" = t."accountId"
 		WHERE t."userId" = ?
 		  AND EXTRACT(MONTH FROM t."transactionDate") >= ?
 		  AND EXTRACT(MONTH FROM t."transactionDate") <= ?
@@ -433,7 +489,7 @@ func (s *Service) YearOverYear(userId string, from, to time.Time, years int) (*Y
 		  AND EXTRACT(YEAR  FROM t."transactionDate") <= ?
 		  AND t."relatedTransactionId" IS NULL
 		  AND t."deletedAt" IS NULL
-		GROUP BY year, month_num
+		GROUP BY year, month_num, a."currency"
 		ORDER BY year ASC, month_num ASC
 	`, userId, fromMonth, toMonth, fromYear, from.Year()).Scan(&rows).Error
 	if err != nil {
@@ -442,10 +498,18 @@ func (s *Service) YearOverYear(userId string, from, to time.Time, years int) (*Y
 
 	lookup := make(map[int]map[int]yoyAgg)
 	for _, r := range rows {
+		inc, incOk := s.convert(r.Income, r.AccountCurrency, baseCurrency, "YearOverYear")
+		exp, expOk := s.convert(r.Expense, r.AccountCurrency, baseCurrency, "YearOverYear")
+		if !incOk || !expOk {
+			continue
+		}
 		if _, ok := lookup[r.Year]; !ok {
 			lookup[r.Year] = make(map[int]yoyAgg)
 		}
-		lookup[r.Year][r.MonthNum] = r
+		agg := lookup[r.Year][r.MonthNum]
+		agg.Income += inc
+		agg.Expense += exp
+		lookup[r.Year][r.MonthNum] = agg
 	}
 
 	months := make([]string, 0, toMonth-fromMonth+1)
@@ -469,7 +533,8 @@ func (s *Service) YearOverYear(userId string, from, to time.Time, years int) (*Y
 	}
 
 	return &YearOverYearResponse{
-		Months: months,
+		BaseCurrency: baseCurrency,
+		Months:       months,
 		Years:  yearRows,
 	}, nil
 }

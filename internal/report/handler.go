@@ -26,6 +26,15 @@ func NewHandler(svc ServiceI, settings SettingsProvider) *Handler {
 	return &Handler{svc: svc, settings: settings}
 }
 
+// baseCurrency returns the user's base currency, defaulting to USD.
+func (h *Handler) baseCurrency(userId string) string {
+	bc, _ := h.settings.GetBaseCurrency(userId)
+	if bc == "" {
+		return "USD"
+	}
+	return bc
+}
+
 func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, auth gin.HandlerFunc) {
 	g := rg.Group("/reports", auth)
 	g.GET("/category-breakdown", h.categoryBreakdown)
@@ -35,6 +44,10 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, auth gin.HandlerFunc) {
 	g.GET("/cash-flow", h.cashFlow)
 	g.GET("/year-over-year", h.yearOverYear)
 }
+
+// maxReportRange bounds report date ranges so month-filling and recurrence
+// counting loops stay small.
+const maxReportRange = 10 * 366 * 24 * time.Hour
 
 // parseDateRange returns from/to from query params, defaulting to current calendar month.
 func parseDateRange(c *gin.Context) (time.Time, time.Time, error) {
@@ -55,6 +68,12 @@ func parseDateRange(c *gin.Context) (time.Time, time.Time, error) {
 			return time.Time{}, time.Time{}, fmt.Errorf("invalid to date: use YYYY-MM-DD")
 		}
 		to = time.Date(t.Year(), t.Month(), t.Day(), 23, 59, 59, 999999999, time.UTC)
+	}
+	if to.Before(from) {
+		return time.Time{}, time.Time{}, fmt.Errorf("from must not be after to")
+	}
+	if to.Sub(from) > maxReportRange {
+		return time.Time{}, time.Time{}, fmt.Errorf("date range must not exceed 10 years")
 	}
 	return from, to, nil
 }
@@ -169,7 +188,7 @@ func (h *Handler) topCategories(c *gin.Context) {
 		}
 	}
 
-	rows, err := h.svc.TopCategories(claims.Sub, from, to, limit)
+	rows, err := h.svc.TopCategories(claims.Sub, from, to, limit, h.baseCurrency(claims.Sub))
 	if err != nil {
 		common.RespondInternalError(c)
 		return
@@ -212,7 +231,7 @@ func (h *Handler) cashFlow(c *gin.Context) {
 		}
 	}
 
-	resp, err := h.svc.CashFlow(claims.Sub, from, to, months)
+	resp, err := h.svc.CashFlow(claims.Sub, from, to, months, h.baseCurrency(claims.Sub))
 	if err != nil {
 		common.RespondInternalError(c)
 		return
@@ -255,7 +274,7 @@ func (h *Handler) yearOverYear(c *gin.Context) {
 		}
 	}
 
-	resp, err := h.svc.YearOverYear(claims.Sub, from, to, years)
+	resp, err := h.svc.YearOverYear(claims.Sub, from, to, years, h.baseCurrency(claims.Sub))
 	if err != nil {
 		common.RespondInternalError(c)
 		return

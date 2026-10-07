@@ -56,10 +56,11 @@ type CashFlowRecurring struct {
 }
 
 type CashFlowResponse struct {
-	Period    CashFlowPeriod    `json:"period"`
-	Actual    CashFlowSummary   `json:"actual"`
-	Projected CashFlowSummary   `json:"projected"`
-	Recurring CashFlowRecurring `json:"recurring"`
+	BaseCurrency string            `json:"baseCurrency"`
+	Period       CashFlowPeriod    `json:"period"`
+	Actual       CashFlowSummary   `json:"actual"`
+	Projected    CashFlowSummary   `json:"projected"`
+	Recurring    CashFlowRecurring `json:"recurring"`
 }
 
 type YearRow struct {
@@ -68,6 +69,7 @@ type YearRow struct {
 }
 
 type YearOverYearResponse struct {
-	Months []string  `json:"months"`
-	Years  []YearRow `json:"years"`
+	BaseCurrency string    `json:"baseCurrency"`
+	Months       []string  `json:"months"`
+	Years        []YearRow `json:"years"`
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -82,7 +83,8 @@ func main() {
 	defer budgetScheduler.Stop()
 
 	// Handlers
-	authHandler        := auth.NewHandler(authSvc)
+	tokenStore         := auth.NewTokenStore(db)
+	authHandler        := auth.NewHandler(authSvc, tokenStore)
 	userHandler        := user.NewHandler(userSvc)
 	accountHandler     := account.NewHandler(accountSvc, currencySvc, userSvc)
 	categoryHandler    := category.NewHandler(categorySvc)
@@ -93,12 +95,16 @@ func main() {
 	budgetHandler      := budget.NewHandler(budgetSvc)
 
 	// Auth middleware
-	jwtAuth := middleware.JWTAuth(cfg.JWT.Secret)
+	jwtAuth := middleware.JWTAuth(cfg.JWT.Secret, tokenStore)
 
 	r := gin.Default()
+	if err := r.SetTrustedProxies(cfg.TrustedProxies); err != nil {
+		log.Fatalf("invalid TRUSTED_PROXIES: %v", err)
+	}
 
 	r.Use(cors.New(cors.Config{
-		AllowAllOrigins: true,
+		AllowAllOrigins: len(cfg.CORSAllowedOrigins) == 0,
+		AllowOrigins:    cfg.CORSAllowedOrigins,
 		AllowMethods:    []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:    []string{"Origin", "Content-Type", "Authorization"},
 		ExposeHeaders:   []string{"Content-Length"},
@@ -109,8 +115,8 @@ func main() {
 	})
 	r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
-	api := r.Group("/api/v1")
-	authHandler.RegisterRoutes(api)
+	api := r.Group("/api/v1", middleware.ValidateIDParams())
+	authHandler.RegisterRoutes(api.Group("", middleware.RateLimit(20, time.Minute)), jwtAuth)
 	userHandler.RegisterRoutes(api, jwtAuth)
 	accountHandler.RegisterRoutes(api, jwtAuth)
 	categoryHandler.RegisterRoutes(api, jwtAuth)

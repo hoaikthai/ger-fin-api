@@ -12,7 +12,7 @@ GerFin is a personal finance management application. Users track income and expe
 
 A registered account. Each user has an email (unique), hashed password, optional first/last name, and owns all other entities.
 
-Authentication uses JWT (Bearer token). Tokens are stateless — there is no session store. Token expiry is configured via `JWT_SECRET` and TTL in config.
+Authentication uses JWT (Bearer token). Each token carries a unique ID (`jti`); `POST /auth/logout` adds it to a denylist (`revoked_token`) until it expires. Token expiry is configured via `JWT_EXPIRES_IN`; `JWT_SECRET` must be at least 32 bytes.
 
 ### Account
 
@@ -89,6 +89,8 @@ Generated transactions have `recurringTransactionId` set so they can be traced b
 - Creating an `expense` transaction decreases the account balance by `amount`.
 - Updating a transaction recalculates the balance delta (reverses the old effect, applies the new one).
 - Deleting a transaction reverses its balance effect before soft-deleting.
+- Transactions created before balance tracking (migration 009, `balanceApplied = false`) never moved the balance, so editing or deleting them leaves the balance unchanged.
+- An account's currency cannot be changed once it has transactions.
 
 ### Transfers
 
@@ -113,8 +115,11 @@ Swagger UI: `http://localhost:3000/swagger/index.html`
 
 | Method | Path               | Description          |
 |--------|--------------------|----------------------|
-| POST   | /auth/register     | Register new user    |
+| POST   | /auth/register     | Register new user (same 201 response whether or not the email exists) |
 | POST   | /auth/login        | Login, receive JWT   |
+| POST   | /auth/logout       | Revoke current token |
+
+`/auth/*` is rate-limited to 20 requests per minute per client IP.
 
 ### User
 

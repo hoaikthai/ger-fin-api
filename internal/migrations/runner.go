@@ -22,6 +22,9 @@ var all = []Migration{
 	migration006(),
 	migration007(),
 	migration008(),
+	migration009(),
+	migration010(),
+	migration011(),
 }
 
 func Run(db *gorm.DB) error {
@@ -68,3 +71,6 @@ func Run(db *gorm.DB) error {
 
 	return nil
 }
+
+// All returns the registered migrations in order (used by tests).
+func All() []Migration { return all }
