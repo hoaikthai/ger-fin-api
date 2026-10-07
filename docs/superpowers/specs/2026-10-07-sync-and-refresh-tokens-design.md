@@ -74,6 +74,8 @@ All rules apply to every synced entity's create/update/delete endpoints.
 - If the `id` exists for **another** user: `409 Conflict` (never leak the row).
 - Body accepts optional `clientModifiedAt`; stored on the row.
 - `POST /transfers` accepts `id` and `relatedId` for the two legs; idempotency is checked on `id`.
+  A replay must name the same pair (the `id` row's `relatedTransactionId` equals `relatedId`),
+  else `409`. A new transfer whose `relatedId` already exists (any user, live or deleted) → `409`.
 
 ### 5.2 Update (`PATCH`)
 

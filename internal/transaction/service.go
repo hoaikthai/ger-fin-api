@@ -336,6 +336,14 @@ func (s *Service) FindByAccount(accountId, userId string, period common.TimePeri
 	return txs, err
 }
 
+// transactionExists reports whether any row, of any user and including
+// soft-deleted ones, has this id.
+func transactionExists(db *gorm.DB, id string) (bool, error) {
+	var n int64
+	err := db.Raw(`SELECT COUNT(*) FROM "transaction" WHERE "id" = ?`, id).Scan(&n).Error
+	return n > 0, err
+}
+
 func (s *Service) Transfer(dto CreateTransferDto, userId string) (*TransferResult, error) {
 	if (dto.ID == nil) != (dto.RelatedID == nil) {
 		return nil, common.NewBadRequest("id and relatedId must be sent together")
@@ -350,11 +358,23 @@ func (s *Service) Transfer(dto CreateTransferDto, userId string) (*TransferResul
 		if err != nil {
 			return nil, err
 		}
+		if src.RelatedTransactionId == nil || *src.RelatedTransactionId != *dto.RelatedID {
+			return nil, common.NewConflict("id belongs to a different transaction")
+		}
 		dst, err := s.FindOne(*dto.RelatedID, userId)
 		if err != nil {
 			return nil, err
 		}
 		return &TransferResult{SourceTransaction: src, DestinationTransaction: dst}, nil
+	} else if dto.RelatedID != nil {
+		// A new transfer must not adopt an existing row as its destination leg.
+		inUse, err := transactionExists(s.db, *dto.RelatedID)
+		if err != nil {
+			return nil, err
+		}
+		if inUse {
+			return nil, common.NewConflict("relatedId is already in use")
+		}
 	}
 	if dto.SourceAccountId == dto.DestinationAccountId {
 		return nil, common.NewBadRequest("Source and destination accounts cannot be the same")

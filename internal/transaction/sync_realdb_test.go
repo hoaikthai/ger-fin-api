@@ -186,3 +186,136 @@ func TestRealDB_Sync_TransferIdsMustComeTogether(t *testing.T) {
 	_, err = svc.Transfer(same, userId)
 	assert.Equal(t, 400, appCode(t, err))
 }
+
+func transferDto(id, relatedId *string, srcId, dstId string) CreateTransferDto {
+	return CreateTransferDto{
+		ID: id, RelatedID: relatedId,
+		SourceAccountId: srcId, DestinationAccountId: dstId, Amount: 25, Description: "move",
+	}
+}
+
+func relatedIdOf(t *testing.T, db *gorm.DB, id string) *string {
+	t.Helper()
+	var rows []struct {
+		RelatedTransactionId *string `gorm:"column:relatedTransactionId"`
+	}
+	require.NoError(t, db.Raw(`SELECT "relatedTransactionId" FROM "transaction" WHERE "id" = ?`, id).Scan(&rows).Error)
+	require.Len(t, rows, 1)
+	return rows[0].RelatedTransactionId
+}
+
+func TestRealDB_Sync_TransferWithNewIdAndExistingRelatedIdIsConflict(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	seedDefaultCategories(t, db)
+	svc := NewService(db)
+	userId := seedUser(t, db)
+	other := seedUser(t, db)
+	src := seedAccountNamed(t, db, userId, "Src")
+	dst := seedAccountNamed(t, db, userId, "Dst")
+	cat := seedCategory(t, db, userId, common.TransactionTypeExpense)
+
+	live, err := svc.Create(expenseDto(nil, src.ID, cat.ID), userId)
+	require.NoError(t, err)
+	deleted, err := svc.Create(expenseDto(nil, src.ID, cat.ID), userId)
+	require.NoError(t, err)
+	require.NoError(t, svc.Remove(deleted.ID, userId))
+	otherAcc := seedAccount(t, db, other)
+	otherCat := seedCategory(t, db, other, common.TransactionTypeExpense)
+	foreign, err := svc.Create(expenseDto(nil, otherAcc.ID, otherCat.ID), other)
+	require.NoError(t, err)
+
+	for name, relatedId := range map[string]string{"live own": live.ID, "deleted own": deleted.ID, "foreign": foreign.ID} {
+		id := uuid.NewString()
+		_, err := svc.Transfer(transferDto(&id, &relatedId, src.ID, dst.ID), userId)
+		assert.Equal(t, 409, appCode(t, err), name)
+		var n int64
+		require.NoError(t, db.Raw(`SELECT COUNT(*) FROM "transaction" WHERE "id" = ?`, id).Scan(&n).Error)
+		assert.Zero(t, n, "%s: no source leg created", name)
+	}
+
+	assert.Nil(t, relatedIdOf(t, db, live.ID), "unrelated transaction is not linked")
+	assert.InDelta(t, 990.0, balanceOf(t, db, src.ID), 0.001, "source not debited")
+	assert.InDelta(t, 1000.0, balanceOf(t, db, dst.ID), 0.001, "destination not credited")
+}
+
+func TestRealDB_Sync_TransferReplayOfDifferentTransactionIsConflict(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	seedDefaultCategories(t, db)
+	svc := NewService(db)
+	userId := seedUser(t, db)
+	src := seedAccountNamed(t, db, userId, "Src")
+	dst := seedAccountNamed(t, db, userId, "Dst")
+	cat := seedCategory(t, db, userId, common.TransactionTypeExpense)
+	plain, err := svc.Create(expenseDto(nil, src.ID, cat.ID), userId)
+	require.NoError(t, err)
+	another, err := svc.Create(expenseDto(nil, src.ID, cat.ID), userId)
+	require.NoError(t, err)
+
+	fresh := uuid.NewString()
+	for name, relatedId := range map[string]string{"existing relatedId": another.ID, "new relatedId": fresh} {
+		_, err := svc.Transfer(transferDto(&plain.ID, &relatedId, src.ID, dst.ID), userId)
+		assert.Equal(t, 409, appCode(t, err), name)
+	}
+	assert.InDelta(t, 980.0, balanceOf(t, db, src.ID), 0.001)
+	assert.InDelta(t, 1000.0, balanceOf(t, db, dst.ID), 0.001)
+}
+
+func TestRealDB_Sync_TransferReplayAfterDeleteIsGone(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	seedDefaultCategories(t, db)
+	svc := NewService(db)
+	userId := seedUser(t, db)
+	src := seedAccountNamed(t, db, userId, "Src")
+	dst := seedAccountNamed(t, db, userId, "Dst")
+	id, relatedId := uuid.NewString(), uuid.NewString()
+	dto := transferDto(&id, &relatedId, src.ID, dst.ID)
+
+	_, err := svc.Transfer(dto, userId)
+	require.NoError(t, err)
+	require.NoError(t, svc.Remove(id, userId))
+
+	_, err = svc.Transfer(dto, userId)
+	assert.Equal(t, 410, appCode(t, err))
+	assert.InDelta(t, 1000.0, balanceOf(t, db, src.ID), 0.001)
+	assert.InDelta(t, 1000.0, balanceOf(t, db, dst.ID), 0.001)
+}
+
+func TestRealDB_Sync_TransferWithForeignIdIsConflict(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	seedDefaultCategories(t, db)
+	svc := NewService(db)
+	userId := seedUser(t, db)
+	other := seedUser(t, db)
+	otherAcc := seedAccount(t, db, other)
+	otherCat := seedCategory(t, db, other, common.TransactionTypeExpense)
+	foreign, err := svc.Create(expenseDto(nil, otherAcc.ID, otherCat.ID), other)
+	require.NoError(t, err)
+	src := seedAccountNamed(t, db, userId, "Src")
+	dst := seedAccountNamed(t, db, userId, "Dst")
+	relatedId := uuid.NewString()
+
+	_, err = svc.Transfer(transferDto(&foreign.ID, &relatedId, src.ID, dst.ID), userId)
+	assert.Equal(t, 409, appCode(t, err))
+	assert.InDelta(t, 1000.0, balanceOf(t, db, src.ID), 0.001)
+}
+
+func TestRealDB_Sync_DeleteTransferLegTwiceIsIdempotent(t *testing.T) {
+	db := testutil.NewRealDB(t)
+	seedDefaultCategories(t, db)
+	svc := NewService(db)
+	userId := seedUser(t, db)
+	src := seedAccountNamed(t, db, userId, "Src")
+	dst := seedAccountNamed(t, db, userId, "Dst")
+	id, relatedId := uuid.NewString(), uuid.NewString()
+	_, err := svc.Transfer(transferDto(&id, &relatedId, src.ID, dst.ID), userId)
+	require.NoError(t, err)
+
+	require.NoError(t, svc.Remove(id, userId))
+	require.NoError(t, svc.Remove(id, userId), "second delete succeeds")
+
+	var live int64
+	require.NoError(t, db.Raw(`SELECT COUNT(*) FROM "transaction" WHERE "id" IN (?, ?) AND "deletedAt" IS NULL`, id, relatedId).Scan(&live).Error)
+	assert.Zero(t, live, "both legs deleted")
+	assert.InDelta(t, 1000.0, balanceOf(t, db, src.ID), 0.001, "source reversed once")
+	assert.InDelta(t, 1000.0, balanceOf(t, db, dst.ID), 0.001, "destination reversed once")
+}
