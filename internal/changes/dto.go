@@ -4,7 +4,7 @@ import (
 	"ger_fin_api/internal/account"
 	"ger_fin_api/internal/budget"
 	"ger_fin_api/internal/category"
-	recurringTx "ger_fin_api/internal/recurring_transaction"
+	"ger_fin_api/internal/recurring_transaction"
 	"ger_fin_api/internal/transaction"
 	"ger_fin_api/internal/user"
 )
@@ -12,12 +12,12 @@ import (
 // ChangeSet holds live rows changed since the cursor, as raw model rows
 // (relations as ids, no computed fields).
 type ChangeSet struct {
-	Accounts              []account.Account                  `json:"accounts"`
-	Categories            []category.Category                `json:"categories"`
-	Transactions          []transaction.Transaction          `json:"transactions"`
-	Budgets               []budget.Budget                    `json:"budgets"`
-	RecurringTransactions []recurringTx.RecurringTransaction `json:"recurringTransactions"`
-	UserSettings          []user.UserSettings                `json:"userSettings"`
+	Accounts              []account.Account                            `json:"accounts"`
+	Categories            []category.Category                          `json:"categories"`
+	Transactions          []transaction.Transaction                    `json:"transactions"`
+	Budgets               []budget.Budget                              `json:"budgets"`
+	RecurringTransactions []recurring_transaction.RecurringTransaction `json:"recurringTransactions"`
+	UserSettings          []user.UserSettings                          `json:"userSettings"`
 }
 
 // DeletedRef identifies a row soft-deleted since the cursor.
@@ -41,7 +41,7 @@ func newResponse(cursor int64) *Response {
 			Categories:            []category.Category{},
 			Transactions:          []transaction.Transaction{},
 			Budgets:               []budget.Budget{},
-			RecurringTransactions: []recurringTx.RecurringTransaction{},
+			RecurringTransactions: []recurring_transaction.RecurringTransaction{},
 			UserSettings:          []user.UserSettings{},
 		},
 		Deleted: []DeletedRef{},

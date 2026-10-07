@@ -73,12 +73,13 @@ func (h *Handler) register(c *gin.Context) {
 }
 
 // @Summary		Logout
-// @Description	Revoke the current access token
+// @Description	Revoke the current access token and, when refresh_token is sent, that refresh token's session
 // @Tags		auth
 // @Accept		json
 // @Produce		json
 // @Param		body body LogoutDto false "Refresh token to revoke"
 // @Success		200 {object} common.MessageResponse
+// @Failure		400 {object} common.ErrorResponse
 // @Failure		401 {object} common.ErrorResponse
 // @Security	BearerAuth
 // @Router		/auth/logout [post]
@@ -118,6 +119,7 @@ func (h *Handler) logout(c *gin.Context) {
 // @Success		200 {object} LoginResponse
 // @Failure		400 {object} common.ErrorResponse
 // @Failure		401 {object} common.ErrorResponse
+// @Failure		429 {object} common.ErrorResponse
 // @Router		/auth/login [post]
 func (h *Handler) login(c *gin.Context) {
 	var dto LoginDto
