@@ -38,6 +38,8 @@ type DatabaseConfig struct {
 type JWTConfig struct {
 	Secret    string
 	ExpiresIn time.Duration
+	// RefreshTTL from REFRESH_TOKEN_TTL; each refresh extends the session by this much.
+	RefreshTTL time.Duration
 }
 
 func (d DatabaseConfig) DSN() string {
@@ -72,6 +74,13 @@ func Load() (*Config, error) {
 		}
 	}
 
+	refreshTTL := 90 * 24 * time.Hour
+	if raw := viper.GetString("REFRESH_TOKEN_TTL"); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil {
+			refreshTTL = d
+		}
+	}
+
 	port := viper.GetInt("PORT")
 	if port == 0 {
 		port = 3000
@@ -88,8 +97,9 @@ func Load() (*Config, error) {
 			SSLMode:  dbSSLMode(),
 		},
 		JWT: JWTConfig{
-			Secret:    secret,
-			ExpiresIn: expiresIn,
+			Secret:     secret,
+			ExpiresIn:  expiresIn,
+			RefreshTTL: refreshTTL,
 		},
 	}
 
