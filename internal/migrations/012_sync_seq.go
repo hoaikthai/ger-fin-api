@@ -36,16 +36,7 @@ func migration012() Migration {
 					return err
 				}
 				for _, table := range syncedTables {
-					if err := tx.Exec(fmt.Sprintf(`
-						ALTER TABLE "%[1]s" ADD COLUMN IF NOT EXISTS "seq" bigint;
-						ALTER TABLE "%[1]s" ADD COLUMN IF NOT EXISTS "clientModifiedAt" timestamptz;
-						UPDATE "%[1]s" SET "seq" = nextval('sync_seq') WHERE "seq" IS NULL;
-						ALTER TABLE "%[1]s" ALTER COLUMN "seq" SET NOT NULL;
-						CREATE INDEX IF NOT EXISTS "IDX_%[1]s_user_seq" ON "%[1]s" ("userId", "seq");
-						DROP TRIGGER IF EXISTS "TRG_%[1]s_sync_seq" ON "%[1]s";
-						CREATE TRIGGER "TRG_%[1]s_sync_seq" BEFORE INSERT OR UPDATE ON "%[1]s"
-							FOR EACH ROW EXECUTE FUNCTION sync_bump_seq();
-					`, table)).Error; err != nil {
+					if err := tx.Exec(syncSeqTableSQL(table)).Error; err != nil {
 						return fmt.Errorf("%s: %w", table, err)
 					}
 				}
@@ -53,4 +44,19 @@ func migration012() Migration {
 			})
 		},
 	}
+}
+
+// syncSeqTableSQL adds the sync columns to one table, backfills seq for
+// existing rows and installs the seq trigger.
+func syncSeqTableSQL(table string) string {
+	return fmt.Sprintf(`
+		ALTER TABLE "%[1]s" ADD COLUMN IF NOT EXISTS "seq" bigint;
+		ALTER TABLE "%[1]s" ADD COLUMN IF NOT EXISTS "clientModifiedAt" timestamptz;
+		UPDATE "%[1]s" SET "seq" = nextval('sync_seq') WHERE "seq" IS NULL;
+		ALTER TABLE "%[1]s" ALTER COLUMN "seq" SET NOT NULL;
+		CREATE INDEX IF NOT EXISTS "IDX_%[1]s_user_seq" ON "%[1]s" ("userId", "seq");
+		DROP TRIGGER IF EXISTS "TRG_%[1]s_sync_seq" ON "%[1]s";
+		CREATE TRIGGER "TRG_%[1]s_sync_seq" BEFORE INSERT OR UPDATE ON "%[1]s"
+			FOR EACH ROW EXECUTE FUNCTION sync_bump_seq();
+	`, table)
 }
