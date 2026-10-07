@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -109,4 +110,51 @@ func TestRealDB_RefreshStore_RevokeFamilyOf(t *testing.T) {
 	require.NoError(t, store.RevokeFamilyOf(next, userId))
 	_, _, err = store.Rotate(next)
 	assert.Equal(t, ErrInvalidRefreshToken, err)
+}
+
+func TestRealDB_RefreshStore_RevokeWaitsForConcurrentRotation(t *testing.T) {
+	db := testutil.NewRealDBShared(t)
+	userId := testutil.SeedUser(t, db)
+	t.Cleanup(func() { db.Exec(`DELETE FROM "user" WHERE "id" = ?`, userId) })
+	store := NewRefreshStore(db, testRefreshTTL)
+
+	original, err := store.Issue(userId)
+	require.NoError(t, err)
+	var familyId string
+	require.NoError(t, db.Raw(`SELECT "familyId" FROM "refresh_token" WHERE "tokenHash" = ?`, hashToken(original)).Scan(&familyId).Error)
+
+	// txB models a rotation in flight: holds the family lock, successor uncommitted.
+	txB := db.Begin()
+	require.NoError(t, txB.Error)
+	done := false
+	t.Cleanup(func() {
+		if !done {
+			txB.Rollback()
+		}
+	})
+	require.NoError(t, lockFamily(txB, familyId))
+	successor, err := store.insert(txB, userId, familyId)
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	revoked := make(chan error, 1)
+	go func() {
+		defer wg.Done()
+		revoked <- store.RevokeFamilyOf(original, userId)
+	}()
+
+	select {
+	case err := <-revoked:
+		t.Fatalf("revocation returned before the concurrent rotation committed: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	require.NoError(t, txB.Commit().Error)
+	done = true
+	wg.Wait()
+	require.NoError(t, <-revoked)
+
+	_, _, err = store.Rotate(successor)
+	assert.Equal(t, ErrInvalidRefreshToken, err, "successor created mid-revocation is revoked")
 }

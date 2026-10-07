@@ -73,6 +73,16 @@ func (s *RefreshStore) Rotate(token string) (string, string, error) {
 	var userId, next string
 	reused := false
 	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var familyIds []string
+		if err := tx.Raw(`SELECT "familyId" FROM "refresh_token" WHERE "tokenHash" = ?`, hashToken(token)).Scan(&familyIds).Error; err != nil {
+			return err
+		}
+		if len(familyIds) == 0 {
+			return ErrInvalidRefreshToken
+		}
+		if err := lockFamily(tx, familyIds[0]); err != nil {
+			return err
+		}
 		var rows []refreshRow
 		if err := tx.Raw(`SELECT "id", "userId", "familyId", "expiresAt", "usedAt", "revokedAt"
 			FROM "refresh_token" WHERE "tokenHash" = ? FOR UPDATE`, hashToken(token)).Scan(&rows).Error; err != nil {
@@ -115,8 +125,26 @@ func (s *RefreshStore) Rotate(token string) (string, string, error) {
 // RevokeFamilyOf ends the session that token belongs to (logout). Tokens of
 // other users are left alone.
 func (s *RefreshStore) RevokeFamilyOf(token, userId string) error {
-	return s.db.Exec(`UPDATE "refresh_token" SET "revokedAt" = ?
-		WHERE "revokedAt" IS NULL AND "familyId" = (
-			SELECT "familyId" FROM "refresh_token" WHERE "tokenHash" = ? AND "userId" = ?)`,
-		s.now(), hashToken(token), userId).Error
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		var familyIds []string
+		if err := tx.Raw(`SELECT "familyId" FROM "refresh_token" WHERE "tokenHash" = ? AND "userId" = ?`,
+			hashToken(token), userId).Scan(&familyIds).Error; err != nil {
+			return err
+		}
+		if len(familyIds) == 0 {
+			return nil
+		}
+		if err := lockFamily(tx, familyIds[0]); err != nil {
+			return err
+		}
+		return tx.Exec(`UPDATE "refresh_token" SET "revokedAt" = ? WHERE "familyId" = ? AND "revokedAt" IS NULL`,
+			s.now(), familyIds[0]).Error
+	})
+}
+
+// lockFamily serializes rotation and revocation of one token family, so a
+// revocation always sees successors created by a concurrent rotation. It is
+// always taken before any row lock, giving a single lock order.
+func lockFamily(tx *gorm.DB, familyId string) error {
+	return tx.Exec(`SELECT pg_advisory_xact_lock(hashtext(?))`, familyId).Error
 }
