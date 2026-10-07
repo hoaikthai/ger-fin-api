@@ -25,6 +25,7 @@ var all = []Migration{
 	migration009(),
 	migration010(),
 	migration011(),
+	migration012(),
 }
 
 func Run(db *gorm.DB) error {

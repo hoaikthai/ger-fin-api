@@ -19,14 +19,9 @@ var (
 	setupErr  error
 )
 
-// NewRealDB returns a *gorm.DB backed by the real test database.
-// Setup (connect + migrate) runs once per test binary. Each call wraps
-// the connection in a transaction that rolls back when the test ends,
-// keeping tests isolated without truncating tables.
-// If the database is unreachable the test is skipped, not failed.
-func NewRealDB(t *testing.T) *gorm.DB {
+// ensureRealDB connects and migrates once per test binary, or skips the test.
+func ensureRealDB(t *testing.T) {
 	t.Helper()
-
 	setupOnce.Do(func() {
 		p, err := testDBParams()
 		if err != nil {
@@ -52,10 +47,28 @@ func NewRealDB(t *testing.T) *gorm.DB {
 	if setupErr != nil {
 		t.Skipf("real db unavailable, skipping: %v", setupErr)
 	}
+}
 
+// NewRealDB returns a *gorm.DB backed by the real test database.
+// Setup (connect + migrate) runs once per test binary. Each call wraps
+// the connection in a transaction that rolls back when the test ends,
+// keeping tests isolated without truncating tables.
+// If the database is unreachable the test is skipped, not failed.
+func NewRealDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	ensureRealDB(t)
 	tx := sharedDB.Begin()
 	t.Cleanup(func() { tx.Rollback() })
 	return tx
+}
+
+// NewRealDBShared returns the shared connection without a wrapping transaction,
+// for tests that need several concurrent, committed transactions. Such tests
+// must delete what they create (deleting the user cascades to its rows).
+func NewRealDBShared(t *testing.T) *gorm.DB {
+	t.Helper()
+	ensureRealDB(t)
+	return sharedDB
 }
 
 type dbParams struct {
