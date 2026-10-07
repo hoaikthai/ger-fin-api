@@ -14,6 +14,7 @@ import (
 	"ger_fin_api/internal/auth"
 	"ger_fin_api/internal/budget"
 	"ger_fin_api/internal/category"
+	"ger_fin_api/internal/changes"
 	"ger_fin_api/internal/config"
 	"ger_fin_api/internal/currency"
 	"ger_fin_api/internal/database"
@@ -68,6 +69,8 @@ func main() {
 	recurringTxSvc := recurringTx.NewService(db, transactionSvc)
 	reportSvc      := report.NewService(db, currencySvc)
 	budgetSvc      := budget.NewService(db, currencySvc, userSvc)
+	changesSvc     := changes.NewService(db)
+
 
 	// Schedulers
 	recurringScheduler := recurringTx.NewScheduler(recurringTxSvc)
@@ -93,6 +96,8 @@ func main() {
 	reportHandler      := report.NewHandler(reportSvc, userSvc)
 	currencyHandler    := currency.NewHandler(currencySvc)
 	budgetHandler      := budget.NewHandler(budgetSvc)
+	changesHandler     := changes.NewHandler(changesSvc)
+
 
 	// Auth middleware
 	jwtAuth := middleware.JWTAuth(cfg.JWT.Secret, tokenStore)
@@ -125,6 +130,8 @@ func main() {
 	reportHandler.RegisterRoutes(api, jwtAuth)
 	currencyHandler.RegisterRoutes(api, jwtAuth)
 	budgetHandler.RegisterRoutes(api, jwtAuth)
+	changesHandler.RegisterRoutes(api, jwtAuth)
+
 
 	if err := r.Run(fmt.Sprintf(":%d", cfg.Port)); err != nil {
 		log.Fatalf("failed to start server: %v", err)
