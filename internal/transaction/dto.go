@@ -8,11 +8,11 @@ import (
 
 type CreateTransactionDto struct {
 	common.CreateMeta
-	Type            common.TransactionType `json:"type"            binding:"required,oneof=income expense"`
-	Amount          float64                `json:"amount"          binding:"required"`
-	Description     string                 `json:"description"     binding:"required"`
-	CategoryId      string                 `json:"categoryId"      binding:"required,uuid"`
-	AccountId       string                 `json:"accountId"       binding:"required,uuid"`
+	Type             common.TransactionType `json:"type"            binding:"required,oneof=income expense"`
+	Amount           float64                `json:"amount"          binding:"required"`
+	Description      string                 `json:"description"     binding:"required"`
+	CategoryId       string                 `json:"categoryId"      binding:"required,uuid"`
+	AccountId        string                 `json:"accountId"       binding:"required,uuid"`
 	TransactionDate  *time.Time             `json:"transactionDate"  binding:"omitempty"`
 	OriginalCurrency *string                `json:"originalCurrency" binding:"omitempty,len=3"`
 	OriginalAmount   *float64               `json:"originalAmount"   binding:"omitempty"`
@@ -20,11 +20,11 @@ type CreateTransactionDto struct {
 
 type UpdateTransactionDto struct {
 	common.UpdateMeta
-	Type            *common.TransactionType `json:"type"            binding:"omitempty,oneof=income expense"`
-	Amount          *float64                `json:"amount"          binding:"omitempty"`
-	Description     *string                 `json:"description"     binding:"omitempty"`
-	CategoryId      *string                 `json:"categoryId"      binding:"omitempty,uuid"`
-	AccountId       *string                 `json:"accountId"       binding:"omitempty,uuid"`
+	Type             *common.TransactionType `json:"type"            binding:"omitempty,oneof=income expense"`
+	Amount           *float64                `json:"amount"          binding:"omitempty"`
+	Description      *string                 `json:"description"     binding:"omitempty"`
+	CategoryId       *string                 `json:"categoryId"      binding:"omitempty,uuid"`
+	AccountId        *string                 `json:"accountId"       binding:"omitempty,uuid"`
 	TransactionDate  *time.Time              `json:"transactionDate"  binding:"omitempty"`
 	OriginalCurrency *string                 `json:"originalCurrency" binding:"omitempty,len=3"`
 	OriginalAmount   *float64                `json:"originalAmount"   binding:"omitempty"`
@@ -57,7 +57,7 @@ type ImportResult struct {
 }
 
 type ValidateResult struct {
-	Valid              bool     `json:"valid"`
+	Valid             bool     `json:"valid"`
 	UnknownAccounts   []string `json:"unknownAccounts,omitempty"`
 	UnknownCategories []string `json:"unknownCategories,omitempty"`
 	RowErrors         []string `json:"rowErrors,omitempty"`

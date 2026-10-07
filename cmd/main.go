@@ -5,10 +5,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/gin-contrib/cors"
-	"github.com/gin-gonic/gin"
-	swaggerFiles "github.com/swaggo/files"
-	ginSwagger "github.com/swaggo/gin-swagger"
 	_ "ger_fin_api/docs"
 	"ger_fin_api/internal/account"
 	"ger_fin_api/internal/auth"
@@ -24,6 +20,10 @@ import (
 	"ger_fin_api/internal/report"
 	"ger_fin_api/internal/transaction"
 	"ger_fin_api/internal/user"
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 )
 
 // @title			GerFin API
@@ -51,9 +51,9 @@ func main() {
 	}
 
 	// Services
-	userSvc     := user.NewService(db)
-	authSvc     := auth.NewService(userSvc, cfg.JWT.Secret, cfg.JWT.ExpiresIn)
-	accountSvc  := account.NewService(db)
+	userSvc := user.NewService(db)
+	authSvc := auth.NewService(userSvc, cfg.JWT.Secret, cfg.JWT.ExpiresIn)
+	accountSvc := account.NewService(db)
 	categorySvc := category.NewService(db)
 
 	if err := categorySvc.SeedDefaultCategories(); err != nil {
@@ -67,10 +67,9 @@ func main() {
 
 	transactionSvc := transaction.NewService(db)
 	recurringTxSvc := recurringTx.NewService(db, transactionSvc)
-	reportSvc      := report.NewService(db, currencySvc)
-	budgetSvc      := budget.NewService(db, currencySvc, userSvc)
-	changesSvc     := changes.NewService(db)
-
+	reportSvc := report.NewService(db, currencySvc)
+	budgetSvc := budget.NewService(db, currencySvc, userSvc)
+	changesSvc := changes.NewService(db)
 
 	// Schedulers
 	recurringScheduler := recurringTx.NewScheduler(recurringTxSvc)
@@ -86,19 +85,18 @@ func main() {
 	defer budgetScheduler.Stop()
 
 	// Handlers
-	tokenStore         := auth.NewTokenStore(db)
-	refreshStore       := auth.NewRefreshStore(db, cfg.JWT.RefreshTTL)
-	authHandler        := auth.NewHandler(authSvc, tokenStore, refreshStore)
-	userHandler        := user.NewHandler(userSvc)
-	accountHandler     := account.NewHandler(accountSvc, currencySvc, userSvc)
-	categoryHandler    := category.NewHandler(categorySvc)
+	tokenStore := auth.NewTokenStore(db)
+	refreshStore := auth.NewRefreshStore(db, cfg.JWT.RefreshTTL)
+	authHandler := auth.NewHandler(authSvc, tokenStore, refreshStore)
+	userHandler := user.NewHandler(userSvc)
+	accountHandler := account.NewHandler(accountSvc, currencySvc, userSvc)
+	categoryHandler := category.NewHandler(categorySvc)
 	transactionHandler := transaction.NewHandler(transactionSvc, currencySvc, userSvc)
 	recurringTxHandler := recurringTx.NewHandler(recurringTxSvc)
-	reportHandler      := report.NewHandler(reportSvc, userSvc)
-	currencyHandler    := currency.NewHandler(currencySvc)
-	budgetHandler      := budget.NewHandler(budgetSvc)
-	changesHandler     := changes.NewHandler(changesSvc)
-
+	reportHandler := report.NewHandler(reportSvc, userSvc)
+	currencyHandler := currency.NewHandler(currencySvc)
+	budgetHandler := budget.NewHandler(budgetSvc)
+	changesHandler := changes.NewHandler(changesSvc)
 
 	// Auth middleware
 	jwtAuth := middleware.JWTAuth(cfg.JWT.Secret, tokenStore)
@@ -132,7 +130,6 @@ func main() {
 	currencyHandler.RegisterRoutes(api, jwtAuth)
 	budgetHandler.RegisterRoutes(api, jwtAuth)
 	changesHandler.RegisterRoutes(api, jwtAuth)
-
 
 	if err := r.Run(fmt.Sprintf(":%d", cfg.Port)); err != nil {
 		log.Fatalf("failed to start server: %v", err)

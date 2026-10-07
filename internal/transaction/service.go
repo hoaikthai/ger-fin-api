@@ -674,7 +674,7 @@ func (s *Service) ValidateCsv(csvData []byte, userId string, categoryMapping map
 	}
 
 	return &ValidateResult{
-		Valid:              len(unknownAccSet) == 0 && len(unknownCatSet) == 0 && len(rowErrors) == 0,
+		Valid:             len(unknownAccSet) == 0 && len(unknownCatSet) == 0 && len(rowErrors) == 0,
 		UnknownAccounts:   sortedKeys(unknownAccSet),
 		UnknownCategories: sortedKeys(unknownCatSet),
 		RowErrors:         rowErrors,
