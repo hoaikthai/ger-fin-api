@@ -14,6 +14,7 @@ var syncedTables = []string{"account", "category", "transaction", "budget", "rec
 // advisory lock: one user's writes are serialized, their seq values become
 // visible in commit order, and a pull can never skip a row that commits late.
 // Default categories (userId NULL) only change in migrations/seeding and take no lock.
+// Superseded by 014: the per-row lock deadlocked; a global statement-level lock replaces it.
 func migration012() Migration {
 	return Migration{
 		Version: 12,

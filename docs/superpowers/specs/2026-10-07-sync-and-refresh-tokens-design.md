@@ -53,8 +53,8 @@ For each synced table:
 
 - `"seq" bigint NOT NULL` — assigned from one global sequence `sync_seq` by a
   `BEFORE INSERT OR UPDATE` trigger, so every insert, update and soft delete (including
-  scheduler, import and balance updates) gets a new, strictly larger value. The trigger
-  first takes a per-user advisory lock (see §6).
+  scheduler, import and balance updates) gets a new, strictly larger value. A
+  statement-level trigger first takes a global advisory lock (migration 014, see §6).
 - `"clientModifiedAt" timestamptz` — nullable; set from client writes, used for last-write-wins.
 - Index `("userId", "seq")` (for `category`, the index also serves `userId IS NULL`).
 - Backfill: existing rows get `nextval('sync_seq')` in the migration.
@@ -124,12 +124,22 @@ user (plus default categories), up to `limit` rows total.
 - `cursor` = largest `seq` returned (or the request cursor when empty).
 - Consistency: the query runs in one `REPEATABLE READ` transaction.
 - **No skipped rows.** A `seq` allocated by a transaction that commits *after* a reader has
-  already seen a larger `seq` would be skipped forever. To prevent this, the trigger takes
-  `pg_advisory_xact_lock(hashtext("userId"))` before `nextval`, so one user's writes are
-  serialized and a user's `seq` values become visible in commit order. Cost: concurrent
-  writes for the *same* user wait on each other — acceptable for a personal finance app.
-- Default categories (`userId IS NULL`) only change through migrations, never concurrently
-  with user writes, so they take no lock.
+  already seen a larger `seq` would be skipped forever. To prevent this, every `INSERT` or
+  `UPDATE` statement on a synced table runs a `BEFORE … FOR EACH STATEMENT` trigger
+  (migration 014) that takes the global lock `pg_advisory_xact_lock(1, 0)`, held until the
+  transaction ends. Writes to synced tables are serialized and all `seq` values become
+  visible in commit order. Cost: concurrent writing transactions wait on each other, across
+  all users — acceptable for a personal finance app with short write transactions.
+- Why a statement-level, global lock: migration 012 originally took a per-user lock in the
+  `FOR EACH ROW` trigger. Postgres locks the target row *before* row triggers run, so a
+  transaction holding the user lock and later updating row X could wait on a statement that
+  had already locked X and was waiting in its trigger for the user lock — a deadlock (e.g. a
+  transaction create adjusting an account balance racing `PATCH /accounts/:id`). A
+  statement-level `BEFORE` trigger fires before any row is scanned or locked, so a waiting
+  writer holds no row lock and cannot be part of such a cycle. The row trigger now only
+  assigns `seq`.
+- Default categories (`userId IS NULL`) only change through migrations or seeding; they are
+  covered by the same global lock.
 - The implementation plan must include a concurrency test: writer A allocates `seq` and
   holds its transaction open, writer B for the same user commits, a pull runs, A commits,
   the next pull returns A's row.

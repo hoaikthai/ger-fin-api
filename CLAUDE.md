@@ -283,7 +283,10 @@ Real-DB tests (`TestRealDB_*`) skip when Postgres is unreachable. Point them at 
   for `clientModifiedAt` (last-write-wins).
 - Adding a synced table: add it to `syncedTables` in a new migration (seq column, index,
   trigger), embed `SyncFields`, and add it to `indexSQL`/`loadLive` in `internal/changes`.
-- Default categories must only change in migrations/seeding: they take no per-user lock, so
-  concurrent changes could be skipped by the change feed.
+- Every INSERT/UPDATE statement on a synced table takes one global advisory lock
+  `(1, 0)` in a statement-level trigger (migration 014), held to commit, so seq values become
+  visible in commit order and the change feed never skips a late commit. Never take row locks
+  (`SELECT … FOR UPDATE`) on synced tables before writing them in the same transaction.
+- Default categories only change in migrations/seeding.
 - `GET /sync/changes` and `POST /auth/refresh` are the client contract — see
   `docs/superpowers/specs/2026-10-07-sync-and-refresh-tokens-design.md`.
