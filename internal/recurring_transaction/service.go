@@ -60,6 +60,11 @@ func (s *Service) validateRefs(accountId, categoryId string, txType common.Trans
 }
 
 func (s *Service) Create(dto CreateRecurringTransactionDto, userId string) (*RecurringTransaction, error) {
+	if replay, err := common.CreateReplay(s.db, "recurring_transaction", dto.ID, userId); err != nil {
+		return nil, err
+	} else if replay {
+		return s.FindOne(*dto.ID, userId)
+	}
 	if err := s.validateRefs(dto.AccountId, dto.CategoryId, dto.Type, userId); err != nil {
 		return nil, err
 	}
@@ -83,6 +88,10 @@ func (s *Service) Create(dto CreateRecurringTransactionDto, userId string) (*Rec
 		EndDate:     dto.EndDate,
 		NextDueDate: &nextDueDate,
 		IsActive:    isActive,
+	}
+	rt.ClientModifiedAt = common.ClientTime(dto.ClientModifiedAt)
+	if dto.ID != nil {
+		rt.ID = *dto.ID
 	}
 
 	if err := s.db.Create(rt).Error; err != nil {
@@ -114,7 +123,13 @@ func (s *Service) FindOne(id, userId string) (*RecurringTransaction, error) {
 func (s *Service) Update(id string, dto UpdateRecurringTransactionDto, userId string) (*RecurringTransaction, error) {
 	rt, err := s.FindOne(id, userId)
 	if err != nil {
-		return nil, err
+		return nil, common.GoneIfDeleted(s.db, "recurring_transaction", id, userId, err)
+	}
+	if common.IsStale(rt.ClientModifiedAt, dto.ClientModifiedAt) {
+		return rt, nil
+	}
+	if dto.ClientModifiedAt != nil {
+		rt.ClientModifiedAt = common.ClientTime(dto.ClientModifiedAt)
 	}
 
 	if dto.Type != nil || dto.AccountId != nil || dto.CategoryId != nil {
@@ -177,7 +192,7 @@ func (s *Service) Update(id string, dto UpdateRecurringTransactionDto, userId st
 func (s *Service) Remove(id, userId string) error {
 	rt, err := s.FindOne(id, userId)
 	if err != nil {
-		return err
+		return common.IgnoreIfDeleted(s.db, "recurring_transaction", id, userId, err)
 	}
 	return s.db.Delete(rt).Error
 }

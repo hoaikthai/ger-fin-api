@@ -7,6 +7,7 @@ import (
 )
 
 type CreateRecurringTransactionDto struct {
+	common.CreateMeta
 	Type        common.TransactionType     `json:"type"        binding:"required,oneof=income expense"`
 	Amount      float64                    `json:"amount"      binding:"required,gt=0"`
 	Description string                     `json:"description" binding:"required"`
@@ -19,6 +20,7 @@ type CreateRecurringTransactionDto struct {
 }
 
 type UpdateRecurringTransactionDto struct {
+	common.UpdateMeta
 	Type        *common.TransactionType     `json:"type"        binding:"omitempty,oneof=income expense"`
 	Amount      *float64                    `json:"amount"      binding:"omitempty,gt=0"`
 	Description *string                     `json:"description" binding:"omitempty"`
