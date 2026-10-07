@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"io"
 	"time"
 
 	"ger_fin_api/internal/common"
@@ -84,6 +85,19 @@ func (h *Handler) register(c *gin.Context) {
 func (h *Handler) logout(c *gin.Context) {
 	claims := middleware.CurrentUser(c)
 
+	var dto LogoutDto
+	if err := c.ShouldBindJSON(&dto); err != nil && !errors.Is(err, io.EOF) { // empty body is allowed
+		common.RespondError(c, common.NewBadRequest(err.Error()))
+		return
+	}
+	// Revoke the refresh family first: if it fails the bearer still works and the client can retry.
+	if dto.RefreshToken != nil {
+		if err := h.refresh.RevokeFamilyOf(*dto.RefreshToken, claims.Sub); err != nil {
+			common.RespondInternalError(c)
+			return
+		}
+	}
+
 	expiresAt := time.Now().Add(24 * time.Hour)
 	if claims.ExpiresAt != nil {
 		expiresAt = claims.ExpiresAt.Time
@@ -91,15 +105,6 @@ func (h *Handler) logout(c *gin.Context) {
 	if err := h.tokens.Revoke(claims.ID, expiresAt); err != nil {
 		common.RespondInternalError(c)
 		return
-	}
-
-	var dto LogoutDto
-	_ = c.ShouldBindJSON(&dto) // body is optional
-	if dto.RefreshToken != nil {
-		if err := h.refresh.RevokeFamilyOf(*dto.RefreshToken, claims.Sub); err != nil {
-			common.RespondInternalError(c)
-			return
-		}
 	}
 	c.JSON(200, common.MessageResponse{Message: "Logged out"})
 }

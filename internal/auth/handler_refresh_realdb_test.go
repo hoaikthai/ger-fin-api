@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -89,4 +90,33 @@ func TestRealDB_AuthHandler_LogoutWithoutBodyStillWorks(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	assert.Equal(t, 200, w.Code)
+
+	code, _ := send(t, r, "/auth/logout", login["access_token"].(string), map[string]any{})
+	assert.Equal(t, 401, code, "access token is denylisted after logout")
+}
+
+func TestRealDB_AuthHandler_LogoutMalformedBodyRevokesNothing(t *testing.T) {
+	r := newAuthRouter(t)
+	email := uniqueEmail(t)
+	send(t, r, "/auth/register", "", map[string]string{"email": email, "password": "password123"})
+	_, login := send(t, r, "/auth/login", "", map[string]string{"email": email, "password": "password123"})
+	access := login["access_token"].(string)
+
+	for _, body := range []string{`{bad json`, `{"refresh_token": 123}`} {
+		req := httptest.NewRequest(http.MethodPost, "/auth/logout", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+access)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		assert.Equal(t, 400, w.Code, body)
+	}
+
+	code, _ := send(t, r, "/auth/refresh", "", map[string]any{"refresh_token": login["refresh_token"]})
+	assert.Equal(t, 200, code, "refresh token untouched")
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
+	req.Header.Set("Authorization", "Bearer "+access)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Equal(t, 200, w.Code, "access token still accepted")
 }
