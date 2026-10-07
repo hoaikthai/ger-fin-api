@@ -7,6 +7,7 @@ import (
 )
 
 type CreateBudgetDto struct {
+	common.CreateMeta
 	CategoryId *string             `json:"categoryId" binding:"omitempty,uuid"` // nil = overall total-expense cap
 	PeriodType common.BudgetPeriod `json:"periodType" binding:"required,oneof=monthly yearly"`
 	Amount     float64             `json:"amount"     binding:"required,gt=0"`
@@ -14,6 +15,7 @@ type CreateBudgetDto struct {
 }
 
 type UpdateBudgetDto struct {
+	common.UpdateMeta
 	Amount   *float64 `json:"amount"   binding:"omitempty,gt=0"`
 	Rollover *bool    `json:"rollover" binding:"omitempty"`
 	IsActive *bool    `json:"isActive" binding:"omitempty"`

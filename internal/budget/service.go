@@ -33,6 +33,11 @@ func NewService(db *gorm.DB, conv CurrencyConverter, settings BaseCurrencyProvid
 }
 
 func (s *Service) Create(dto CreateBudgetDto, userId string) (*Budget, error) {
+	if replay, err := common.CreateReplay(s.db, "budget", dto.ID, userId); err != nil {
+		return nil, err
+	} else if replay {
+		return s.findOneRaw(*dto.ID, userId)
+	}
 	if err := s.validateCategory(dto.CategoryId, userId); err != nil {
 		return nil, err
 	}
@@ -65,6 +70,10 @@ func (s *Service) Create(dto CreateBudgetDto, userId string) (*Budget, error) {
 		CarriedOver: 0,
 		Rollover:    rollover,
 		IsActive:    true,
+	}
+	b.ClientModifiedAt = common.ClientTime(dto.ClientModifiedAt)
+	if dto.ID != nil {
+		b.ID = *dto.ID
 	}
 	if err := s.db.Create(b).Error; err != nil {
 		if common.IsUniqueViolation(err) {
@@ -235,7 +244,13 @@ func (s *Service) FindAll(userId string, monthStart, yearStart time.Time) ([]Bud
 func (s *Service) Update(id string, dto UpdateBudgetDto, userId string) (*Budget, error) {
 	b, err := s.findOneRaw(id, userId)
 	if err != nil {
-		return nil, err
+		return nil, common.GoneIfDeleted(s.db, "budget", id, userId, err)
+	}
+	if common.IsStale(b.ClientModifiedAt, dto.ClientModifiedAt) {
+		return b, nil
+	}
+	if dto.ClientModifiedAt != nil {
+		b.ClientModifiedAt = common.ClientTime(dto.ClientModifiedAt)
 	}
 	if dto.Amount != nil {
 		b.Amount = *dto.Amount
@@ -255,7 +270,7 @@ func (s *Service) Update(id string, dto UpdateBudgetDto, userId string) (*Budget
 func (s *Service) Remove(id, userId string) error {
 	b, err := s.findOneRaw(id, userId)
 	if err != nil {
-		return err
+		return common.IgnoreIfDeleted(s.db, "budget", id, userId, err)
 	}
 	return s.db.Delete(b).Error
 }
