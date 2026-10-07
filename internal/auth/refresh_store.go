@@ -144,7 +144,9 @@ func (s *RefreshStore) RevokeFamilyOf(token, userId string) error {
 
 // lockFamily serializes rotation and revocation of one token family, so a
 // revocation always sees successors created by a concurrent rotation. It is
-// always taken before any row lock, giving a single lock order.
+// always taken before any row lock, giving a single lock order. Key space 2
+// keeps it apart from the sync lock (1, 0); the 32-bit hash can collide, which
+// only adds waiting.
 func lockFamily(tx *gorm.DB, familyId string) error {
-	return tx.Exec(`SELECT pg_advisory_xact_lock(hashtext(?))`, familyId).Error
+	return tx.Exec(`SELECT pg_advisory_xact_lock(2, hashtext(?))`, familyId).Error
 }

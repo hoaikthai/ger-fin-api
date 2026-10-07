@@ -288,5 +288,7 @@ Real-DB tests (`TestRealDB_*`) skip when Postgres is unreachable. Point them at 
   visible in commit order and the change feed never skips a late commit. Never take row locks
   (`SELECT … FOR UPDATE`) on synced tables before writing them in the same transaction.
 - Default categories only change in migrations/seeding.
+- Advisory lock keys use the two-key form with a namespace: `(1, 0)` sync, `(2, hash)` refresh
+  token families.
 - `GET /sync/changes` and `POST /auth/refresh` are the client contract — see
   `docs/superpowers/specs/2026-10-07-sync-and-refresh-tokens-design.md`.
