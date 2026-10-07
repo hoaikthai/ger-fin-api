@@ -60,11 +60,11 @@ func TestUpdate_ChangesAccountId(t *testing.T) {
 	mock.ExpectQuery(`SELECT \* FROM "account"`).WillReturnRows(sqlmock.NewRows(testutil.AccountCols()).
 		AddRow(testNewAccId, now, now, nil, "Bank", "USD", 0.0, nil, true, testUserId))
 	mock.ExpectBegin()
-	args := make([]driver.Value, 16)
+	args := make([]driver.Value, 17)
 	for i := range args {
 		args[i] = sqlmock.AnyArg()
 	}
-	args[8] = equalsArg{testNewAccId} // "accountId" in the SET list
+	args[9] = equalsArg{testNewAccId} // "accountId" in the SET list
 	mock.ExpectExec(`UPDATE "transaction"`).WithArgs(args...).WillReturnResult(sqlmock.NewResult(0, 1))
 	// Balance moves from the old account to the new one.
 	mock.ExpectExec(`UPDATE "account" SET "balance"=balance \+ \$1`).WithArgs(10.0, sqlmock.AnyArg(), testOldAccId).WillReturnResult(sqlmock.NewResult(0, 1))

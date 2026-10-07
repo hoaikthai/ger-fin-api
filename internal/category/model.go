@@ -4,6 +4,7 @@ import "ger_fin_api/internal/common"
 
 type Category struct {
 	common.BaseModel
+	common.SyncFields
 	Name      string      `gorm:"column:name;not null"                             json:"name"`
 	Type      string      `gorm:"column:type;not null"                             json:"type"`
 	IsDefault bool        `gorm:"column:isDefault;default:false"                   json:"isDefault"`

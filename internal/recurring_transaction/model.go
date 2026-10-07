@@ -10,6 +10,7 @@ import (
 
 type RecurringTransaction struct {
 	common.BaseModel
+	common.SyncFields
 	Type        string              `gorm:"column:type;not null"                      json:"type"`
 	Amount      float64             `gorm:"column:amount;type:numeric(15,2);not null" json:"amount"`
 	Description string              `gorm:"column:description;not null"               json:"description"`

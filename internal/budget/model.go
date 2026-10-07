@@ -9,6 +9,7 @@ import (
 
 type Budget struct {
 	common.BaseModel
+	common.SyncFields
 	SeriesId    string             `gorm:"column:seriesId;type:uuid;not null"          json:"seriesId"`
 	CategoryId  *string            `gorm:"column:categoryId;type:uuid"                 json:"categoryId"`
 	Category    *category.Category `gorm:"foreignKey:CategoryId"                       json:"category,omitempty"`

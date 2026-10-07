@@ -4,6 +4,7 @@ import "ger_fin_api/internal/common"
 
 type UserSettings struct {
 	common.BaseModel
+	common.SyncFields
 	UserId            string  `gorm:"column:userId;type:uuid;not null;uniqueIndex" json:"userId"`
 	CashFlowMonths    int     `gorm:"column:cashFlowMonths;default:3"              json:"cashFlowMonths"`
 	YearOverYearYears int     `gorm:"column:yearOverYearYears;default:2"           json:"yearOverYearYears"`

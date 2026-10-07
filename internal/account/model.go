@@ -4,6 +4,7 @@ import "ger_fin_api/internal/common"
 
 type Account struct {
 	common.BaseModel
+	common.SyncFields
 	Name        string  `gorm:"column:name;not null"                    json:"name"`
 	Currency    string  `gorm:"column:currency;type:varchar(3);not null" json:"currency"`
 	Balance     float64 `gorm:"column:balance;type:numeric(15,2);default:0" json:"balance"`
