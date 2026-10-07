@@ -257,6 +257,7 @@ Security-related settings:
 | `DB_SSLMODE`           | `disable`          | Use `require` (or stricter) when Postgres is on another host          |
 | `CORS_ALLOWED_ORIGINS` | allow all          | Comma-separated origin allow-list                                     |
 | `TRUSTED_PROXIES`      | trust none         | Comma-separated IPs/CIDRs of reverse proxies; needed for correct client IPs (auth rate limit) behind a proxy |
+| `REFRESH_TOKEN_TTL` | `2160h` | Sliding refresh-token lifetime; each refresh extends it |
 
 Real-DB tests (`TestRealDB_*`) skip when Postgres is unreachable. Point them at any Postgres via env vars, e.g.
 `DB_HOST=localhost DB_PORT=55432 DB_USER=postgres DB_PASS=… DB_NAME=fin_db go test -p 1 ./...`
@@ -272,3 +273,17 @@ Real-DB tests (`TestRealDB_*`) skip when Postgres is unreachable. Point them at 
 - Hard-deleting instead of soft-deleting → bypasses GORM's `DeletedAt` filter and data is unrecoverable.
 - `db.Save(x)` on a struct with preloaded belongs-to associations (e.g. `Account`, `Category`, `Parent`) copies the association's ID back onto the foreign key — an update to `accountId` is silently reverted. Use `db.Omit(clause.Associations).Save(x)` and reload.
 - Preloading `Children` of shared default categories must be filtered by `userId`, or other users' categories leak.
+
+## Sync (offline-first clients)
+
+- Synced tables (`account`, `category`, `transaction`, `budget`, `recurring_transaction`,
+  `user_settings`) embed `common.SyncFields`. `seq` is set by a DB trigger — never write it.
+- New synced writes must follow `internal/common/sync.go`: `CreateReplay` on create (client
+  ids), `GoneIfDeleted` on update, `IgnoreIfDeleted` on delete, `IsStale` + `ClientTime`
+  for `clientModifiedAt` (last-write-wins).
+- Adding a synced table: add it to `syncedTables` in a new migration (seq column, index,
+  trigger), embed `SyncFields`, and add it to `indexSQL`/`loadLive` in `internal/changes`.
+- Default categories must only change in migrations/seeding: they take no per-user lock, so
+  concurrent changes could be skipped by the change feed.
+- `GET /sync/changes` and `POST /auth/refresh` are the client contract — see
+  `docs/superpowers/specs/2026-10-07-sync-and-refresh-tokens-design.md`.
