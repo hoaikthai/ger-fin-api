@@ -12,11 +12,22 @@ type LoginDto struct {
 	Password string `json:"password" binding:"required"`
 }
 
-// LoginResponse is the response body for a successful login.
 // registerAcceptedMessage is the response to every valid registration request,
 // whether or not the email was already registered (prevents account enumeration).
 const registerAcceptedMessage = "If this email is not already registered, the account has been created. Please log in."
 
+// LoginResponse is returned by login and refresh.
 type LoginResponse struct {
-	AccessToken string `json:"access_token"`
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"` // access token lifetime in seconds
+}
+
+type RefreshDto struct {
+	RefreshToken string `json:"refresh_token" binding:"required"`
+}
+
+// LogoutDto is optional; sending the refresh token also ends that session.
+type LogoutDto struct {
+	RefreshToken *string `json:"refresh_token"`
 }

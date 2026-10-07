@@ -82,12 +82,8 @@ func (s *Service) ValidateUser(email, password string) (*user.User, error) {
 	return u, nil
 }
 
-func (s *Service) Login(email, password string) (string, error) {
-	u, err := s.ValidateUser(email, password)
-	if err != nil {
-		return "", err
-	}
-
+// AccessToken signs a short-lived JWT for u.
+func (s *Service) AccessToken(u *user.User) (string, error) {
 	claims := common.JWTClaims{
 		Sub:   u.ID,
 		Email: u.Email,
@@ -97,7 +93,29 @@ func (s *Service) Login(email, password string) (string, error) {
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(s.jwtExpiry)),
 		},
 	}
-
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString([]byte(s.jwtSecret))
 }
+
+func (s *Service) Login(email, password string) (string, error) {
+	u, err := s.ValidateUser(email, password)
+	if err != nil {
+		return "", err
+	}
+	return s.AccessToken(u)
+}
+
+// FindUser loads the owner of a refresh token; a deleted user is unauthorized.
+func (s *Service) FindUser(id string) (*user.User, error) {
+	u, err := s.userSvc.FindById(id)
+	if err != nil {
+		return nil, err
+	}
+	if u == nil {
+		return nil, ErrInvalidRefreshToken
+	}
+	return u, nil
+}
+
+// AccessTTL is the access token lifetime reported to clients as expires_in.
+func (s *Service) AccessTTL() time.Duration { return s.jwtExpiry }

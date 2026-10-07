@@ -87,7 +87,8 @@ func main() {
 
 	// Handlers
 	tokenStore         := auth.NewTokenStore(db)
-	authHandler        := auth.NewHandler(authSvc, tokenStore)
+	refreshStore       := auth.NewRefreshStore(db, cfg.JWT.RefreshTTL)
+	authHandler        := auth.NewHandler(authSvc, tokenStore, refreshStore)
 	userHandler        := user.NewHandler(userSvc)
 	accountHandler     := account.NewHandler(accountSvc, currencySvc, userSvc)
 	categoryHandler    := category.NewHandler(categorySvc)
