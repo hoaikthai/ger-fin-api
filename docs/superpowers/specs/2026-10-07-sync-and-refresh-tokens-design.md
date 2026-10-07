@@ -68,9 +68,9 @@ All rules apply to every synced entity's create/update/delete endpoints.
 ### 5.1 Create
 
 - Request body accepts an optional `id` (UUID). Absent → server generates, as today.
-- If a row with that `id` already exists **for this user** (including soft-deleted):
-  return `200` with the current row (soft-deleted → `410 Gone`). No side effects run again
-  (balances move once).
+- If a row with that `id` already exists **for this user**: return the current row with the
+  endpoint's normal success status (`201`), so a replay is indistinguishable from the first
+  success. Soft-deleted → `410 Gone`. No side effects run again (balances move once).
 - If the `id` exists for **another** user: `409 Conflict` (never leak the row).
 - Body accepts optional `clientModifiedAt`; stored on the row.
 - `POST /transfers` accepts `id` and `relatedId` for the two legs; idempotency is checked on `id`.
@@ -82,11 +82,13 @@ All rules apply to every synced entity's create/update/delete endpoints.
 - `clientModifiedAt` older than the stored value → no change, `200` with the current row.
 - Otherwise apply as today (validation, balance adjustments) and store `clientModifiedAt`.
 - Absent `clientModifiedAt` → apply unconditionally (backwards compatible).
+- A `clientModifiedAt` in the future (device clock ahead) is clamped to server `now()` before
+  comparing and storing, so one bad clock cannot make a record un-editable.
 
 ### 5.3 Delete
 
 - Soft delete as today; balance reversal runs once.
-- Already deleted → `204` (idempotent), no side effects.
+- Already deleted → the endpoint's normal success response (`200` + message), no side effects.
 
 ### 5.4 Errors
 
@@ -112,9 +114,13 @@ user (plus default categories), up to `limit` rows total.
 }
 ```
 
-- Row shapes match each entity's existing single-item response, plus `seq` and
-  `clientModifiedAt`. Transactions include `relatedTransactionId` and `accountId`/`categoryId`.
+- Rows are the raw model rows (the GORM model's JSON) including `seq` and
+  `clientModifiedAt`, with relations as ids only (`accountId`, `categoryId`,
+  `relatedTransactionId`, `parentId`) — no nested objects and no computed fields such as
+  `baseAmount`; the client has the related rows and the rates locally.
 - Soft-deleted rows appear only in `deleted`.
+- `cursor` greater than the current `sync_seq` value (e.g. the server database was reset) →
+  `409 Conflict`; the client discards its cursor and pulls from `0`.
 - `cursor` = largest `seq` returned (or the request cursor when empty).
 - Consistency: the query runs in one `REPEATABLE READ` transaction.
 - **No skipped rows.** A `seq` allocated by a transaction that commits *after* a reader has
@@ -144,7 +150,9 @@ Token value: 32 random bytes, base64url. Only the hash is stored.
   and starts a new family. `POST /auth/register` is unchanged (client logs in afterwards).
 - `POST /auth/refresh` body `{ "refresh_token": "…" }`:
   - unknown / expired / revoked → `401`.
-  - already used (`usedAt` set) → revoke the whole family, `401` (reuse detection).
+  - already used within the last **60 s** (the client lost the previous response on a flaky
+    network and retried) → issue another successor in the same family, no revocation.
+  - already used earlier than that → revoke the whole family, `401` (reuse detection).
   - otherwise mark used, issue a new access token and a new refresh token in the same family
     with `expiresAt = now + 90 days` (sliding), return the same shape as login.
   - Rate-limited like `/auth/login`.
@@ -164,7 +172,7 @@ Follow existing `*_test.go` and `*_realdb_test.go` patterns.
 - Create with an `id` owned by another user → `409`.
 - Transfer with client ids, retried → one pair, balances moved once.
 - Update with older `clientModifiedAt` → unchanged row returned; newer → applied.
-- Update of a deleted row → `410`; delete twice → `204` both times, balance reversed once.
+- Update of a deleted row → `410`; delete twice → `200` both times, balance reversed once.
 - `/sync/changes`: paging and `hasMore`; cursor strictly increases; default categories
   included; deletions in `deleted`; scheduler-created transactions appear; other users' rows
   never appear; concurrent writer test for the cursor rule in §6.
