@@ -61,6 +61,11 @@ func (s *Service) FindOne(id, userId string) (*Category, error) {
 }
 
 func (s *Service) Create(dto CreateCategoryDto, userId string) (*Category, error) {
+	if replay, err := common.CreateReplay(s.db, "category", dto.ID, userId); err != nil {
+		return nil, err
+	} else if replay {
+		return s.FindOne(*dto.ID, userId)
+	}
 	if dto.ParentId != nil {
 		parent, err := s.FindOne(*dto.ParentId, userId)
 		if err != nil {
@@ -81,6 +86,10 @@ func (s *Service) Create(dto CreateCategoryDto, userId string) (*Category, error
 		UserId:    &userId,
 		ParentId:  dto.ParentId,
 	}
+	cat.ClientModifiedAt = common.ClientTime(dto.ClientModifiedAt)
+	if dto.ID != nil {
+		cat.ID = *dto.ID
+	}
 
 	if err := s.db.Create(cat).Error; err != nil {
 		return nil, err
@@ -91,7 +100,10 @@ func (s *Service) Create(dto CreateCategoryDto, userId string) (*Category, error
 func (s *Service) Update(id string, dto UpdateCategoryDto, userId string) (*Category, error) {
 	cat, err := s.FindOne(id, userId)
 	if err != nil {
-		return nil, err
+		return nil, common.GoneIfDeleted(s.db, "category", id, userId, err)
+	}
+	if common.IsStale(cat.ClientModifiedAt, dto.ClientModifiedAt) {
+		return cat, nil
 	}
 	if cat.IsDefault {
 		return nil, common.NewForbidden("Cannot update default categories")
@@ -150,6 +162,10 @@ func (s *Service) Update(id string, dto UpdateCategoryDto, userId string) (*Cate
 		cat.Type = string(*dto.Type)
 	}
 
+	if dto.ClientModifiedAt != nil {
+		cat.ClientModifiedAt = common.ClientTime(dto.ClientModifiedAt)
+	}
+
 	// Omit associations: a stale preloaded Parent would overwrite parentId.
 	if err := s.db.Omit(clause.Associations).Save(cat).Error; err != nil {
 		return nil, err
@@ -160,7 +176,7 @@ func (s *Service) Update(id string, dto UpdateCategoryDto, userId string) (*Cate
 func (s *Service) Remove(id, userId string) error {
 	cat, err := s.FindOne(id, userId)
 	if err != nil {
-		return err
+		return common.IgnoreIfDeleted(s.db, "category", id, userId, err)
 	}
 	if cat.IsDefault {
 		return common.NewForbidden("Cannot delete default categories")

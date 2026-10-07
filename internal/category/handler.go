@@ -33,6 +33,8 @@ func (h *Handler) RegisterRoutes(rg *gin.RouterGroup, auth gin.HandlerFunc) {
 // @Success		201 {object} Category
 // @Failure		400 {object} common.ErrorResponse
 // @Failure		401 {object} common.ErrorResponse
+// @Failure  409 {object} common.ErrorResponse
+// @Failure  410 {object} common.ErrorResponse
 // @Security	BearerAuth
 // @Router		/categories [post]
 func (h *Handler) create(c *gin.Context) {
@@ -121,6 +123,7 @@ func (h *Handler) findOne(c *gin.Context) {
 // @Failure		401 {object} common.ErrorResponse
 // @Failure		403 {object} common.ErrorResponse
 // @Failure		404 {object} common.ErrorResponse
+// @Failure  410 {object} common.ErrorResponse
 // @Security	BearerAuth
 // @Router		/categories/{id} [patch]
 func (h *Handler) update(c *gin.Context) {
