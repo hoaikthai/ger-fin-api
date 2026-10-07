@@ -92,6 +92,11 @@ func validateAmountSign(txType common.TransactionType, amount float64) error {
 }
 
 func (s *Service) Create(dto CreateTransactionDto, userId string) (*Transaction, error) {
+	if replay, err := common.CreateReplay(s.db, "transaction", dto.ID, userId); err != nil {
+		return nil, err
+	} else if replay {
+		return s.FindOne(*dto.ID, userId)
+	}
 	var acc account.Account
 	if err := s.db.Where("id = ? AND \"userId\" = ?", dto.AccountId, userId).First(&acc).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -137,6 +142,10 @@ func (s *Service) Create(dto CreateTransactionDto, userId string) (*Transaction,
 		OriginalAmount:   dto.OriginalAmount,
 		BalanceApplied:   true,
 	}
+	tx.ClientModifiedAt = common.ClientTime(dto.ClientModifiedAt)
+	if dto.ID != nil {
+		tx.ID = *dto.ID
+	}
 
 	if err := s.db.Transaction(func(db *gorm.DB) error {
 		if err := db.Create(tx).Error; err != nil {
@@ -175,7 +184,10 @@ func (s *Service) FindOne(id, userId string) (*Transaction, error) {
 func (s *Service) Update(id string, dto UpdateTransactionDto, userId string) (*Transaction, error) {
 	tx, err := s.FindOne(id, userId)
 	if err != nil {
-		return nil, err
+		return nil, common.GoneIfDeleted(s.db, "transaction", id, userId, err)
+	}
+	if common.IsStale(tx.ClientModifiedAt, dto.ClientModifiedAt) {
+		return tx, nil
 	}
 
 	if dto.AccountId != nil {
@@ -248,6 +260,9 @@ func (s *Service) Update(id string, dto UpdateTransactionDto, userId string) (*T
 	if dto.OriginalAmount != nil {
 		tx.OriginalAmount = dto.OriginalAmount
 	}
+	if dto.ClientModifiedAt != nil {
+		tx.ClientModifiedAt = common.ClientTime(dto.ClientModifiedAt)
+	}
 
 	if err := s.db.Transaction(func(db *gorm.DB) error {
 		// Omit associations: the preloaded Account/Category are stale when the IDs
@@ -274,7 +289,7 @@ func (s *Service) Update(id string, dto UpdateTransactionDto, userId string) (*T
 func (s *Service) Remove(id, userId string) error {
 	tx, err := s.FindOne(id, userId)
 	if err != nil {
-		return err
+		return common.IgnoreIfDeleted(s.db, "transaction", id, userId, err)
 	}
 	return s.db.Transaction(func(db *gorm.DB) error {
 		if tx.RelatedTransactionId != nil {
@@ -322,6 +337,25 @@ func (s *Service) FindByAccount(accountId, userId string, period common.TimePeri
 }
 
 func (s *Service) Transfer(dto CreateTransferDto, userId string) (*TransferResult, error) {
+	if (dto.ID == nil) != (dto.RelatedID == nil) {
+		return nil, common.NewBadRequest("id and relatedId must be sent together")
+	}
+	if dto.ID != nil && *dto.ID == *dto.RelatedID {
+		return nil, common.NewBadRequest("id and relatedId must differ")
+	}
+	if replay, err := common.CreateReplay(s.db, "transaction", dto.ID, userId); err != nil {
+		return nil, err
+	} else if replay {
+		src, err := s.FindOne(*dto.ID, userId)
+		if err != nil {
+			return nil, err
+		}
+		dst, err := s.FindOne(*dto.RelatedID, userId)
+		if err != nil {
+			return nil, err
+		}
+		return &TransferResult{SourceTransaction: src, DestinationTransaction: dst}, nil
+	}
 	if dto.SourceAccountId == dto.DestinationAccountId {
 		return nil, common.NewBadRequest("Source and destination accounts cannot be the same")
 	}
@@ -364,6 +398,7 @@ func (s *Service) Transfer(dto CreateTransferDto, userId string) (*TransferResul
 	}
 
 	srcDto := CreateTransactionDto{
+		CreateMeta:      common.CreateMeta{ID: dto.ID, ClientModifiedAt: dto.ClientModifiedAt},
 		Type:            common.TransactionTypeExpense,
 		Amount:          -abs,
 		Description:     dto.Description,
@@ -372,6 +407,7 @@ func (s *Service) Transfer(dto CreateTransferDto, userId string) (*TransferResul
 		TransactionDate: dto.TransactionDate,
 	}
 	dstDto := CreateTransactionDto{
+		CreateMeta:      common.CreateMeta{ID: dto.RelatedID, ClientModifiedAt: dto.ClientModifiedAt},
 		Type:            common.TransactionTypeIncome,
 		Amount:          destAbs,
 		Description:     dto.Description,

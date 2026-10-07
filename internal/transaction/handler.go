@@ -112,6 +112,8 @@ func (h *Handler) toResponseList(txs []Transaction, bc string) []TransactionResp
 // @Success		201 {object} TransactionResponse
 // @Failure		400 {object} common.ErrorResponse
 // @Failure		401 {object} common.ErrorResponse
+// @Failure		409 {object} common.ErrorResponse
+// @Failure		410 {object} common.ErrorResponse
 // @Security	BearerAuth
 // @Router		/transactions [post]
 func (h *Handler) create(c *gin.Context) {
@@ -190,6 +192,7 @@ func (h *Handler) findOne(c *gin.Context) {
 // @Failure		400 {object} common.ErrorResponse
 // @Failure		401 {object} common.ErrorResponse
 // @Failure		404 {object} common.ErrorResponse
+// @Failure		410 {object} common.ErrorResponse
 // @Security	BearerAuth
 // @Router		/transactions/{id} [patch]
 func (h *Handler) update(c *gin.Context) {
@@ -266,6 +269,8 @@ func (h *Handler) getByAccount(c *gin.Context) {
 // @Failure		400 {object} common.ErrorResponse
 // @Failure		401 {object} common.ErrorResponse
 // @Failure		404 {object} common.ErrorResponse
+// @Failure		409 {object} common.ErrorResponse
+// @Failure		410 {object} common.ErrorResponse
 // @Security	BearerAuth
 // @Router		/transfers [post]
 func (h *Handler) createTransfer(c *gin.Context) {

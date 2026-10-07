@@ -7,6 +7,7 @@ import (
 )
 
 type CreateTransactionDto struct {
+	common.CreateMeta
 	Type            common.TransactionType `json:"type"            binding:"required,oneof=income expense"`
 	Amount          float64                `json:"amount"          binding:"required"`
 	Description     string                 `json:"description"     binding:"required"`
@@ -18,6 +19,7 @@ type CreateTransactionDto struct {
 }
 
 type UpdateTransactionDto struct {
+	common.UpdateMeta
 	Type            *common.TransactionType `json:"type"            binding:"omitempty,oneof=income expense"`
 	Amount          *float64                `json:"amount"          binding:"omitempty"`
 	Description     *string                 `json:"description"     binding:"omitempty"`
@@ -29,6 +31,11 @@ type UpdateTransactionDto struct {
 }
 
 type CreateTransferDto struct {
+	// ID and RelatedID are client-chosen ids for the source and destination
+	// legs; send both or neither. They make retrying the transfer safe.
+	ID                   *string    `json:"id"                   binding:"omitempty,uuid"`
+	RelatedID            *string    `json:"relatedId"            binding:"omitempty,uuid"`
+	ClientModifiedAt     *time.Time `json:"clientModifiedAt"     binding:"omitempty"`
 	SourceAccountId      string     `json:"sourceAccountId"      binding:"required,uuid"`
 	DestinationAccountId string     `json:"destinationAccountId" binding:"required,uuid"`
 	Amount               float64    `json:"amount"               binding:"required,gt=0"`
