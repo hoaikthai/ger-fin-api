@@ -106,6 +106,12 @@ func (s *Service) UpdateSettings(userId string, dto UpdateSettingsDto) (*UserSet
 	if err != nil {
 		return nil, err
 	}
+	if common.IsStale(settings.ClientModifiedAt, dto.ClientModifiedAt) {
+		return settings, nil
+	}
+	if dto.ClientModifiedAt != nil {
+		settings.ClientModifiedAt = common.ClientTime(dto.ClientModifiedAt)
+	}
 
 	if dto.CashFlowMonths != nil {
 		settings.CashFlowMonths = *dto.CashFlowMonths
