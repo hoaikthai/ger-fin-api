@@ -1,6 +1,9 @@
 package account
 
+import "ger_fin_api/internal/common"
+
 type CreateAccountDto struct {
+	common.CreateMeta
 	Name        string  `json:"name"        binding:"required"`
 	Currency    string  `json:"currency"    binding:"required,len=3"`
 	Balance     float64 `json:"balance"     binding:"omitempty,gte=0"`
@@ -8,6 +11,7 @@ type CreateAccountDto struct {
 }
 
 type UpdateAccountDto struct {
+	common.UpdateMeta
 	Name        *string  `json:"name"        binding:"omitempty"`
 	Currency    *string  `json:"currency"    binding:"omitempty,len=3"`
 	Balance     *float64 `json:"balance"     binding:"omitempty"`

@@ -17,12 +17,21 @@ func NewService(db *gorm.DB) *Service {
 }
 
 func (s *Service) Create(userId string, dto CreateAccountDto) (*Account, error) {
+	if replay, err := common.CreateReplay(s.db, "account", dto.ID, userId); err != nil {
+		return nil, err
+	} else if replay {
+		return s.FindOne(*dto.ID, userId)
+	}
 	a := &Account{
 		Name:        dto.Name,
 		Currency:    dto.Currency,
 		Balance:     dto.Balance,
 		Description: dto.Description,
 		UserId:      userId,
+	}
+	a.ClientModifiedAt = common.ClientTime(dto.ClientModifiedAt)
+	if dto.ID != nil {
+		a.ID = *dto.ID
 	}
 	if err := s.db.Create(a).Error; err != nil {
 		return nil, err
@@ -51,7 +60,13 @@ func (s *Service) FindOne(id, userId string) (*Account, error) {
 func (s *Service) Update(id, userId string, dto UpdateAccountDto) (*Account, error) {
 	a, err := s.FindOne(id, userId)
 	if err != nil {
-		return nil, err
+		return nil, common.GoneIfDeleted(s.db, "account", id, userId, err)
+	}
+	if common.IsStale(a.ClientModifiedAt, dto.ClientModifiedAt) {
+		return a, nil
+	}
+	if dto.ClientModifiedAt != nil {
+		a.ClientModifiedAt = common.ClientTime(dto.ClientModifiedAt)
 	}
 
 	if dto.Name != nil {
@@ -86,7 +101,7 @@ func (s *Service) Update(id, userId string, dto UpdateAccountDto) (*Account, err
 func (s *Service) Remove(id, userId string) error {
 	a, err := s.FindOne(id, userId)
 	if err != nil {
-		return err
+		return common.IgnoreIfDeleted(s.db, "account", id, userId, err)
 	}
 	return s.db.Delete(a).Error
 }

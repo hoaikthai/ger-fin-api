@@ -68,6 +68,8 @@ func (h *Handler) toResponse(a *Account, bc string) AccountResponse {
 // @Success     201 {object} AccountResponse
 // @Failure     400 {object} common.ErrorResponse
 // @Failure     401 {object} common.ErrorResponse
+// @Failure     409 {object} common.ErrorResponse
+// @Failure     410 {object} common.ErrorResponse
 // @Security    BearerAuth
 // @Router      /accounts [post]
 func (h *Handler) create(c *gin.Context) {
@@ -158,6 +160,7 @@ func (h *Handler) findOne(c *gin.Context) {
 // @Failure     400 {object} common.ErrorResponse
 // @Failure     401 {object} common.ErrorResponse
 // @Failure     404 {object} common.ErrorResponse
+// @Failure     410 {object} common.ErrorResponse
 // @Security    BearerAuth
 // @Router      /accounts/{id} [patch]
 func (h *Handler) update(c *gin.Context) {
